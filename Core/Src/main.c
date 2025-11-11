@@ -20,6 +20,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "dma.h"
+#include "i2s.h"
 #include "spi.h"
 #include "usart.h"
 #include "gpio.h"
@@ -42,7 +43,36 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+uint32_t dma[2];
+uint32_t val24;
+int val32;
+uint32_t cb_cnt = 0;
 
+void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
+{
+    if (hi2s == &hi2s2)
+    {
+        cb_cnt++;
+
+        int32_t raw_24bit = dma[0] & 0xFFFFFF;
+
+        int32_t audio_sample;
+        if(raw_24bit & 0x800000)
+        {
+            audio_sample = (int32_t)(raw_24bit | 0xFF000000);
+        }
+        else
+        {
+            audio_sample = (int32_t)raw_24bit;
+        }
+
+        if(cb_cnt % 100 == 0)
+        {
+            PRINT("window: %ld", audio_sample);
+        }
+    }
+
+}
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -109,6 +139,7 @@ int main(void)
   MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_SPI1_Init();
+  MX_I2S2_Init();
   /* USER CODE BEGIN 2 */
     WS2812B_Init();
 
@@ -116,6 +147,7 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Init scheduler */
+    HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *)dma, 2);
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
 
@@ -126,6 +158,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
     while (1)
     {
     /* USER CODE END WHILE */

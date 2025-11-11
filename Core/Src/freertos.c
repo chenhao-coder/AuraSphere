@@ -192,7 +192,7 @@ void StartUartTask(void *argument)
     /* Infinite loop */
     for (;;)
     {
-        printf("Hello Word!!!\r\n");
+        // printf("Hello Word!!!\r\n");
         osDelay(pdMS_TO_TICKS(500));
     }
   /* USER CODE END StartUartTask */

@@ -31,7 +31,9 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+// 宏定义函数，简化后期工作，（ARMCC/ARMGCC/GCC编译器）
+// 用于使用printf函数，进行纸飞机数据显示
+#define PRINT(fmt, args...) printf("{"fmt"}\n", ##args)
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -59,6 +61,8 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_Pin GPIO_PIN_3
 #define LED_GPIO_Port GPIOE
+#define ICS_43434_LR_Pin GPIO_PIN_13
+#define ICS_43434_LR_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
