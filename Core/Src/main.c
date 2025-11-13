@@ -29,6 +29,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "ws2812b.h"
+#include "fft_processing.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,6 +51,7 @@ uint32_t cb_cnt = 0;
 
 void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
+#if 0
     if (hi2s == &hi2s2)
     {
         cb_cnt++;
@@ -71,7 +73,7 @@ void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
             PRINT("window: %ld", audio_sample);
         }
     }
-
+#endif
 }
 /* USER CODE END PM */
 
@@ -144,10 +146,18 @@ int main(void)
     WS2812B_Init();
 
     HAL_Delay(100);
+
+    // FFT 初始化
+    FFT_Init();
+
+    printf("FFT处理模块初始化完成\r\n");
+
+    // 运行FFT测试
+    Test_FFT_Multiple_Frequencies();
+
   /* USER CODE END 2 */
 
   /* Init scheduler */
-    HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *)dma, 2);
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
 

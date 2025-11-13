@@ -1,6 +1,13 @@
 {
+    "files.encoding": "gbk",
+    "files.autoGuessEncoding": true,
     "files.associations": {
         "main.h": "c",
-        "usart.h": "c"
+        "usart.h": "c",
+        "ics43434.h": "c",
+        "string.h": "c",
+        "i2s.h": "c",
+        "fft_processing.h": "c",
+        "arm_math.h": "c"
     }
 }

@@ -31,8 +31,8 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-// 瀹忓畾涔夊嚱鏁帮紝绠�鍖栧悗鏈熷伐浣滐紝锛圓RMCC/ARMGCC/GCC缂栬瘧鍣級
-// 鐢ㄤ簬浣跨敤printf鍑芥暟锛岃繘琛岀焊椋炴満鏁版嵁鏄剧ず
+// 宏定义函数，简化后期工作，（ARMCC/ARMGCC/GCC编译器）
+// 用于使用printf函数，进行纸飞机数据显示
 #define PRINT(fmt, args...) printf("{"fmt"}\n", ##args)
 /* USER CODE END Includes */
 

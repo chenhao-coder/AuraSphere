@@ -10,9 +10,11 @@
                 "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
                 "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F",
                 "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32H7xx/Include",
-                "${workspaceFolder}/Drivers/CMSIS/Include"
+                "${workspaceFolder}/Drivers/CMSIS/Include",
+                "${workspaceFolder}/Middlewares/ST/ARM/DSP/Inc"
             ],
             "defines": [
+                "ARM_MATH_CM7",
                 "DEBUG",
                 "USE_PWR_LDO_SUPPLY",
                 "USE_HAL_DRIVER",
