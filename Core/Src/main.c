@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include "ws2812b.h"
 #include "fft_processing.h"
+#include "audio_visual_processor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -154,6 +155,9 @@ int main(void)
 
     // 运行FFT测试
     Test_FFT_Multiple_Frequencies();
+
+    // 运行vmap_fft_spectrum测试
+    Test_map_fft_spectrum();
 
   /* USER CODE END 2 */
 

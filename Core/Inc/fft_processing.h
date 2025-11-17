@@ -18,6 +18,8 @@ void Analyze_Frequency_Spectrum(float32_t *magnitude);
 void Generate_Test_Signal(float32_t *buffer, float freq, uint32_t size);
 void Test_FFT_With_Signal(float test_freq);  // ĞÂÔö²âÊÔº¯Êı
 void Test_FFT_Multiple_Frequencies(void);
+void compute_fft_magnitude(float32_t *fft_data, float32_t *magnitude);
+const float32_t *FFT_Get_Magnitude(void);
 
 #ifdef __cplusplus
 }

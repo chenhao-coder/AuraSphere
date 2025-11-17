@@ -3,12 +3,19 @@
 // FFT变量
 static float32_t fft_input[FFT_SIZE];
 static float32_t fft_output[FFT_SIZE];
+static float32_t magnitude[FFT_SIZE/ 2];
 static arm_rfft_fast_instance_f32 fft_instance;
+
 
 void FFT_Init(void)
 {
     // 初始化FFT实例
     arm_rfft_fast_init_f32(&fft_instance, FFT_SIZE);
+}
+
+const float32_t *FFT_Get_Magnitude(void)
+{
+    return magnitude;
 }
 
 void Process_Data(int32_t *data)
@@ -87,9 +94,6 @@ void Test_FFT_With_Signal(float test_freq)
 
     // 处理数据
     Process_Data(simulated_adc_data);
-
-    // 计算幅值
-    float32_t magnitude[FFT_SIZE / 2];  
     
     for(int i = 0; i < FFT_SIZE / 2; i++)
     {
@@ -140,7 +144,18 @@ void Test_FFT_Multiple_Frequencies(void)
     Test_FFT_With_Signal(15000.0f);
 }
 
-
+/**
+ * @brief 计算FFT结果的幅值(幅度谱)
+ */
+void compute_fft_magnitude(float32_t *fft_data, float32_t *magnitude)
+{
+    for(int i = 0; i < FFT_SIZE / 2; i++)
+    {
+        float32_t real = fft_output[2 * i];
+        float32_t imag = fft_output[2 * i + 1];
+        magnitude[i]  = sqrtf(real * real + imag * imag);
+    }
+}
 
 
 

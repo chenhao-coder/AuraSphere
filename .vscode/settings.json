@@ -8,6 +8,7 @@
         "string.h": "c",
         "i2s.h": "c",
         "fft_processing.h": "c",
-        "arm_math.h": "c"
+        "arm_math.h": "c",
+        "audio_visual_processor.h": "c"
     }
 }
