@@ -26,11 +26,20 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdint.h>
+#include "arm_math.h"
+#include "i2s.h"
+#include "queue.h"
+#include "ics43434.h"
+#include "fft_processing.h"
+#include "audio_visual_processor.h"
+#include "ws2812b.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+static void I2S_DMAxM0Cplt_Callback(void);
+static void I2S_DMAxM1Cplt_Callback(void);
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -54,19 +63,17 @@ const osThreadAttr_t defaultTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for ledTask */
-osThreadId_t ledTaskHandle;
-const osThreadAttr_t ledTask_attributes = {
-  .name = "ledTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+/* Definitions for dataProcessTask */
+osThreadId_t dataProcessTaskHandle;
+const osThreadAttr_t dataProcessTask_attributes = {
+  .name = "dataProcessTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
 };
-/* Definitions for uartTask */
-osThreadId_t uartTaskHandle;
-const osThreadAttr_t uartTask_attributes = {
-  .name = "uartTask",
-  .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+/* Definitions for FFT_queue */
+osMessageQueueId_t FFT_queueHandle;
+const osMessageQueueAttr_t FFT_queue_attributes = {
+  .name = "FFT_queue"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,26 +82,9 @@ const osThreadAttr_t uartTask_attributes = {
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
-void StartLedTask(void *argument);
-void StartUartTask(void *argument);
+void StartdataProcessTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
-
-/* Hook prototypes */
-void configureTimerForRunTimeStats(void);
-unsigned long getRunTimeCounterValue(void);
-
-/* USER CODE BEGIN 1 */
-/* Functions needed when configGENERATE_RUN_TIME_STATS is on */
-__weak void configureTimerForRunTimeStats(void)
-{
-}
-
-__weak unsigned long getRunTimeCounterValue(void)
-{
-    return 0;
-}
-/* USER CODE END 1 */
 
 /**
   * @brief  FreeRTOS initialization
@@ -118,6 +108,10 @@ void MX_FREERTOS_Init(void) {
     /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of FFT_queue */
+  FFT_queueHandle = osMessageQueueNew (3, sizeof(i2s2_buffer_t *), &FFT_queue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
     /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -126,11 +120,8 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* creation of ledTask */
-  ledTaskHandle = osThreadNew(StartLedTask, NULL, &ledTask_attributes);
-
-  /* creation of uartTask */
-  uartTaskHandle = osThreadNew(StartUartTask, NULL, &uartTask_attributes);
+  /* creation of dataProcessTask */
+  dataProcessTaskHandle = osThreadNew(StartdataProcessTask, NULL, &dataProcessTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
@@ -152,6 +143,8 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+    register_callback(I2S_DMAxM0Cplt_Callback, 0);
+    register_callback(I2S_DMAxM1Cplt_Callback, 1);
     /* Infinite loop */
     for (;;)
     {
@@ -160,46 +153,77 @@ void StartDefaultTask(void *argument)
   /* USER CODE END StartDefaultTask */
 }
 
-/* USER CODE BEGIN Header_StartLedTask */
+/* USER CODE BEGIN Header_StartdataProcessTask */
 /**
- * @brief Function implementing the ledTask thread.
- * @param argument: Not used
- * @retval None
- */
-/* USER CODE END Header_StartLedTask */
-void StartLedTask(void *argument)
+* @brief Function implementing the dataProcessTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartdataProcessTask */
+void StartdataProcessTask(void *argument)
 {
-  /* USER CODE BEGIN StartLedTask */
-    /* Infinite loop */
-    for (;;)
-    {
-        HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-        osDelay(pdMS_TO_TICKS(500));
-    }
-  /* USER CODE END StartLedTask */
-}
+  /* USER CODE BEGIN StartdataProcessTask */
+  /* Infinite loop */
+  i2s2_buffer_t * t_i2s2_buffer = NULL;
+  int32_t *t_output_ptr = NULL;
+  float32_t *t_magnitude = NULL;
+  uint8_t *spectrum = NULL;
 
-/* USER CODE BEGIN Header_StartUartTask */
-/**
- * @brief Function implementing the uartTask thread.
- * @param argument: Not used
- * @retval None
- */
-/* USER CODE END Header_StartUartTask */
-void StartUartTask(void *argument)
-{
-  /* USER CODE BEGIN StartUartTask */
-    /* Infinite loop */
-    for (;;)
-    {
-        // printf("Hello Word!!!\r\n");
-        osDelay(pdMS_TO_TICKS(500));
-    }
-  /* USER CODE END StartUartTask */
+  for(;;)
+  {
+    osMessageQueueGet(FFT_queueHandle, &t_i2s2_buffer, NULL, osWaitForever);
+    Ics43434_Out_Process(t_i2s2_buffer->i2s2_data);
+    t_i2s2_buffer->data_ready = 0;
+    t_output_ptr = Ics43434_Get_Output_Ptr();
+    Process_Data(t_output_ptr);
+    t_magnitude = FFT_Get_Magnitude();
+    spectrum = WS2812B_map_fft_spectrum(t_magnitude);
+    LED_DisplaySpectrum(spectrum);
+  }
+  /* USER CODE END StartdataProcessTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+static void I2S_DMAxM0Cplt_Callback(void)
+{
+    // printf("%s\r\n", __func__);
+    i2s2_buffer_t *t_buffer = I2S2_Get_Buffer_Addr();
+    if(t_buffer[0].data_ready != 0)
+    {
+        printf("error: There are unprocessed data in i2s2_buffer[0]\n");
+        return;
+    }
+
+    t_buffer[0].data_ready = 1;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    i2s2_buffer_t *buffer_to_send = &t_buffer[0];
+    if(xQueueSendFromISR(FFT_queueHandle, &buffer_to_send, &xHigherPriorityTaskWoken) != pdTRUE)
+    {
+        printf("FFT_queueHandle is full\n");
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+static void I2S_DMAxM1Cplt_Callback(void)
+{
+    // printf("%s\r\n", __func__);
+    i2s2_buffer_t *t_buffer = I2S2_Get_Buffer_Addr();
+    if(t_buffer[1].data_ready != 0)
+    {
+        printf("error: There are unprocessed data in i2s2_buffer[1]\n");
+        return;
+    }
+
+    t_buffer[1].data_ready = 1;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    i2s2_buffer_t *buffer_to_send = &t_buffer[1];
+    if(xQueueSendFromISR(FFT_queueHandle, &buffer_to_send, &xHigherPriorityTaskWoken) != pdTRUE)
+    {
+        printf("FFT_queueHandle is full\n");
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
 
 /* USER CODE END Application */
 

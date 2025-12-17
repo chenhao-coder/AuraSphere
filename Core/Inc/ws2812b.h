@@ -8,14 +8,22 @@ extern "C" {
 #include "main.h"
 #include "spi.h"
 
-#define WS2812B_NUM_LEDS        8
+#ifndef LED_ROWS        
+#define LED_ROWS            8
+#endif
 
-// æ¯ä¸ªSPIéœ€è¦3ä¸ªSPIå­—èŠ‚ï¼ŒåŠ ä¸Šå¤ä½è„‰å†²
+#ifndef LED_COLS
+#define LED_COLS            8
+#endif
+
+#define NUM_LEDS         (LED_ROWS * LED_COLS)
+
+// Ã¿¸öSPIĞèÒª3¸öSPI×Ö½Ú£¬¼ÓÉÏ¸´Î»Âö³å
 #define BYTES_PER_LED           12
 #define RESET_BYTES             80
-#define WS2812B_BUFFER_SIZE     (WS2812B_NUM_LEDS * BYTES_PER_LED + RESET_BYTES)
+#define WS2812B_BUFFER_SIZE     (RESET_BYTES + NUM_LEDS * BYTES_PER_LED)
 
-// ç¼–ç å¸¸é‡
+// ±àÂë³£Á¿
 #define WS2812B_BIT_0           0x08
 #define WS2812B_BIT_1           0x0C
 
@@ -25,12 +33,14 @@ typedef struct {
     uint8_t blue;
 }WS2812B_Color_t;
 
-// å‡½æ•°å£°æ˜
+// º¯ÊıÉùÃ÷
 void WS2812B_Init(void);
 void WS2812B_SetColor(uint8_t led_num, uint8_t red, uint8_t green, uint8_t blue);
 void WS2812B_SetColorRGB(uint8_t led_num, WS2812B_Color_t color);
 void WS2812B_Update(void);
 void WS2812B_Clear(void);
+void LED_DisplaySpectrum(uint8_t *spectrum);
+void LED_DisplaySpectrum_Test(void);
 
 #ifdef __cplusplus
 }

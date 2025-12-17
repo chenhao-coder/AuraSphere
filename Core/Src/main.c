@@ -45,37 +45,7 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-uint32_t dma[2];
-uint32_t val24;
-int val32;
-uint32_t cb_cnt = 0;
 
-void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
-{
-#if 0
-    if (hi2s == &hi2s2)
-    {
-        cb_cnt++;
-
-        int32_t raw_24bit = dma[0] & 0xFFFFFF;
-
-        int32_t audio_sample;
-        if(raw_24bit & 0x800000)
-        {
-            audio_sample = (int32_t)(raw_24bit | 0xFF000000);
-        }
-        else
-        {
-            audio_sample = (int32_t)raw_24bit;
-        }
-
-        if(cb_cnt % 100 == 0)
-        {
-            PRINT("window: %ld", audio_sample);
-        }
-    }
-#endif
-}
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -144,21 +114,7 @@ int main(void)
   MX_SPI1_Init();
   MX_I2S2_Init();
   /* USER CODE BEGIN 2 */
-    WS2812B_Init();
-
-    HAL_Delay(100);
-
-    // FFT 初始化
     FFT_Init();
-
-    printf("FFT处理模块初始化完成\r\n");
-
-    // 运行FFT测试
-    Test_FFT_Multiple_Frequencies();
-
-    // 运行vmap_fft_spectrum测试
-    Test_map_fft_spectrum();
-
   /* USER CODE END 2 */
 
   /* Init scheduler */

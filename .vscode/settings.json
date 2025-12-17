@@ -9,6 +9,21 @@
         "i2s.h": "c",
         "fft_processing.h": "c",
         "arm_math.h": "c",
-        "audio_visual_processor.h": "c"
+        "audio_visual_processor.h": "c",
+        "dma.h": "c",
+        "stm32h7xx_hal.h": "c",
+        "stm32h7xx_hal_conf.h": "c",
+        "stm32h7xx_hal_mdma.h": "c",
+        "stm32h7xx_hal_dma.h": "c",
+        "stdio.h": "c",
+        "gpio.h": "c",
+        "freertos.h": "c",
+        "cmsis_os.h": "c",
+        "task.h": "c",
+        "freertosconfig.h": "c",
+        "ws2812b.h": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c"
     }
 }

@@ -1,11 +1,20 @@
 #include "audio_visual_processor.h"
+#include "ws2812b.h"
 
+#define NOISE_FLOOR 0.03f   // 需要你实际调
+
+static float last_spectrum[FREQ_BINS] = {0};
 // 频率分辨率
 const float freq_resolution = (float)SAMPLE_RATE / FFT_SIZE;
 
 // 12频段划分
+// const uint16_t freq_bands[FREQ_BINS] = {
+//     100, 200, 350, 500, 800, 1200, 2000, 3000, 5000, 8000, 12000, 18000
+// };
+
+
 const uint16_t freq_bands[FREQ_BINS] = {
-    100, 200, 350, 500, 800, 1200, 2000, 3000, 5000, 8000, 12000, 18000
+    400, 800, 1200, 2000, 3500, 6000, 10000, 16000
 };
 
 static uint8_t spectrum[FREQ_BINS];
@@ -15,7 +24,7 @@ void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum)
     float32_t band_energy[FREQ_BINS] = {0};
     uint16_t band_counts[FREQ_BINS] = {0};
 
-    for(int i = 0; i < FFT_SIZE / 2; i++)
+    for(int i = 2; i < FFT_SIZE / 2; i++)
     {
         float freq = i * freq_resolution;
 
@@ -34,13 +43,24 @@ void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum)
     static float max_energy = 0.1f;
 
     // 计算当前帧的最大值
-    float current_max = 0.1f;
+    float current_max = 0.0f;
 
     for(uint8_t band = 0; band < FREQ_BINS; band++)
     {
+        if(band_energy[band] < NOISE_FLOOR)
+        {
+            band_energy[band] = 0.0f;
+        }
+
         if(band_counts[band] > 0)
         {
             band_energy[band] /= band_counts[band];   // 计算平均值
+
+            if(band < 2)
+            {
+                band_energy[band] *= 0.3f;  // 降低权重
+                band_energy[band] = fmaxf(0.0f, band_energy[band] - 0.02f);
+            }
         }
 
         if(band_energy[band] > current_max)
@@ -49,34 +69,56 @@ void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum)
         }
     }
 
-    // 更新最大值(带衰减)
-    if(current_max > max_energy)
+    // 智能最大值跟踪
+    if(current_max > max_energy * 2.0f)
     {
-        max_energy = current_max;
+        max_energy = current_max * 0.7f + max_energy * 0.3f;
     }
-    else
+    else if(current_max > max_energy) 
     {
-        max_energy = max_energy * 0.995f + current_max * 0.005f;    // 缓慢衰减
+        // 正常上升
+        max_energy = max_energy * 0.8f + current_max * 0.2f;
+    } 
+    else 
+    {
+        // 下降时更慢
+        max_energy = max_energy * 0.95f + current_max * 0.05f;
     }
 
-    // 防止除零
-    if(max_energy < 0.0001f)
+    if(max_energy < 0.05f) 
     {
-        max_energy = 0.0001f;
+        memset(spectrum, 0, FREQ_BINS);
+        return;
     }
 
     // 映射到LED高度
     for(uint8_t band = 0; band < FREQ_BINS; band++)
     {
         float normalized = band_energy[band] / max_energy;
-
+        
+        // 非线性映射
+        normalized = sqrtf(normalized); // 平方根让响应更平缓
+        
+        // 低频段额外抑制
+        if(band < 2) 
+        {
+            normalized = powf(normalized, 1.8f);
+        }
          // 应用飞线性映射(平方根让幅值更灵敏)
-        normalized = sqrtf(normalized);
+        // normalized = sqrtf(normalized);
 
-        float sensitivity = 1.5f;   // 可调节灵敏度
-        uint8_t level = (uint8_t)(normalized * LED_ROWS * sensitivity);
+        uint8_t level = (uint8_t)(normalized * LED_ROWS);
+            
+        // 更强的平滑
+        float smooth_factor = (band < 2) ? 0.8f : 0.6f;
+        level = last_spectrum[band] * (1.0f - smooth_factor) + level * smooth_factor;
+        
+        // 设置显示阈值
+        if(level < 2 || normalized < 0.2f) level = 0;
+        if(level > LED_ROWS) level = LED_ROWS;
 
-        spectrum[band] = (level > LED_ROWS) ? LED_ROWS : level;
+        spectrum[band] = level;
+        last_spectrum[band] = level;
     }
 }
 
@@ -130,5 +172,16 @@ void Test_map_fft_spectrum(void)
     {
         PRINT("spectrum: %d", spectrum[band]);
     }
+}
+
+uint8_t *WS2812B_map_fft_spectrum(const float32_t *magnitude)
+{
+    map_fft_spectrum(magnitude, spectrum);
+    for(uint8_t band = 0; band < FREQ_BINS; band++)
+    {
+        PRINT("spectrum: %d", spectrum[band]);
+    }
+
+    return spectrum;
 }
 

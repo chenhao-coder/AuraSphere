@@ -1,9 +1,10 @@
 #include "fft_processing.h"
 #include "stdio.h"
+
 // FFT变量
 static float32_t fft_input[FFT_SIZE];
 static float32_t fft_output[FFT_SIZE];
-static float32_t magnitude[FFT_SIZE/ 2];
+static float32_t magnitude[FFT_SIZE / 2];
 static arm_rfft_fast_instance_f32 fft_instance;
 
 
@@ -13,24 +14,39 @@ void FFT_Init(void)
     arm_rfft_fast_init_f32(&fft_instance, FFT_SIZE);
 }
 
-const float32_t *FFT_Get_Magnitude(void)
+float32_t *FFT_Get_Magnitude(void)
 {
     return magnitude;
 }
 
 void Process_Data(int32_t *data)
 {
+    float32_t mean = 0;
+
     for(int i = 0; i < FFT_SIZE; i++)
     {
         // 转换为浮点数（-1.0 到 1.0）
         fft_input[i] = (float32_t)data[i] / 8388608.0f; // 24位有符号数
+        mean += fft_input[i];
+    }
+    mean /= FFT_SIZE;
 
+    for(int i = 0; i < FFT_SIZE; i++)
+    {
+        fft_input[i] = fft_input[i] - mean; // 去直流
         // 应用汉宁窗减少频谱泄漏
         fft_input[i] *= (0.5f * (1.0f - arm_cos_f32(2 * PI * i / (FFT_SIZE - 1))));
     }
 
     // 执行FFT
     arm_rfft_fast_f32(&fft_instance, fft_input, fft_output, 0);
+    
+    for(int i = 0; i < FFT_SIZE / 2; i++)
+    {
+        float32_t real = fft_output[2 * i];
+        float32_t imag = fft_output[2 * i + 1];
+        magnitude[i]  = sqrtf(real * real + imag * imag);
+    }
 }
 
 void Analyze_Frequency_Spectrum(float32_t *magnitude)
@@ -147,7 +163,7 @@ void Test_FFT_Multiple_Frequencies(void)
 /**
  * @brief 计算FFT结果的幅值(幅度谱)
  */
-void compute_fft_magnitude(float32_t *fft_data, float32_t *magnitude)
+void compute_fft_magnitude(void)
 {
     for(int i = 0; i < FFT_SIZE / 2; i++)
     {
