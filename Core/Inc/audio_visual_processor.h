@@ -20,6 +20,7 @@ extern "C" {
 void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum);
 void Test_map_fft_spectrum(void);
 uint8_t *WS2812B_map_fft_spectrum(const float32_t *magnitude);
+void map_fft_spectrum_test(const float32_t *magnitude, uint8_t *spectrum);
 
 #ifdef __cplusplus
 }

@@ -1,12 +1,19 @@
 #include "fft_processing.h"
 #include "stdio.h"
 
+// #define FFT_TEST_MODE
+#define HPF_ALPHA        0.995f     // 高通系数（80~150Hz，和采样率有关）
+#define NOISE_GAIN       1.5f       // 噪声门限倍率
+#define NOISE_BINS       10          // 用前10个bin估计噪声底
+
 // FFT变量
 static float32_t fft_input[FFT_SIZE];
 static float32_t fft_output[FFT_SIZE];
 static float32_t magnitude[FFT_SIZE / 2];
 static arm_rfft_fast_instance_f32 fft_instance;
 
+static float32_t hpf_x_prev = 0.0f;
+static float32_t hpf_y_prev = 0.0f;
 
 void FFT_Init(void)
 {
@@ -23,30 +30,65 @@ void Process_Data(int32_t *data)
 {
     float32_t mean = 0;
 
+    /* ===================== 1. ADC → 浮点 ===================== */
     for(int i = 0; i < FFT_SIZE; i++)
     {
-        // 转换为浮点数（-1.0 到 1.0）
         fft_input[i] = (float32_t)data[i] / 8388608.0f; // 24位有符号数
-        mean += fft_input[i];
     }
-    mean /= FFT_SIZE;
+
+#ifdef FFT_TEST_MODE
+#else
+    /* ===================== 2. DC去除 （CMSIS 标准) ===================== */
+    arm_mean_f32(fft_input, FFT_SIZE, &mean);
 
     for(int i = 0; i < FFT_SIZE; i++)
     {
-        fft_input[i] = fft_input[i] - mean; // 去直流
-        // 应用汉宁窗减少频谱泄漏
-        fft_input[i] *= (0.5f * (1.0f - arm_cos_f32(2 * PI * i / (FFT_SIZE - 1))));
+        fft_input[i] -= mean;
     }
 
-    // 执行FFT
-    arm_rfft_fast_f32(&fft_instance, fft_input, fft_output, 0);
-    
-    for(int i = 0; i < FFT_SIZE / 2; i++)
+    /* ===================== 3. 一阶高通滤波（去低频/风噪/抖动） ===================== */
+    for(int i = 0; i< FFT_SIZE; i++)
     {
-        float32_t real = fft_output[2 * i];
-        float32_t imag = fft_output[2 * i + 1];
-        magnitude[i]  = sqrtf(real * real + imag * imag);
+        float32_t y = fft_input[i] - hpf_x_prev + HPF_ALPHA * hpf_y_prev;
+        hpf_x_prev = fft_input[i];
+        hpf_y_prev = y;
+        fft_input[i] = y;
     }
+#endif
+
+    /* ===================== 4. Hann 窗（你原来就是对的） ===================== */
+    for (int i = 0; i < FFT_SIZE; i++)
+    {
+        fft_input[i] *= 0.5f * (1.0f - arm_cos_f32(2 * PI * i / (FFT_SIZE - 1)));
+    }
+
+    /* ===================== 5. FFT ===================== */
+    arm_rfft_fast_f32(&fft_instance, fft_input, fft_output, 0);
+
+    /* ===================== 6. 幅值谱 ===================== */
+    compute_rfft_magnitude(fft_output, magnitude, FFT_SIZE);
+
+    /* ===================== 7. 自适应噪声门限（FFT 后去底噪） ===================== */
+    float32_t noise_floor;
+    arm_mean_f32(&magnitude[1], NOISE_BINS, &noise_floor);
+
+    for (int i = 1; i < FFT_SIZE / 2; i++)
+    {
+        if (magnitude[i] < noise_floor * NOISE_GAIN)
+        {
+            magnitude[i] = 0.0f;
+        }
+    }
+
+    /* ===================== 8. 频谱平滑（显示/能量稳定） ===================== */
+    for (int i = 1; i < FFT_SIZE / 2 - 1; i++)
+    {
+        magnitude[i] =
+            0.25f * magnitude[i - 1] +
+            0.5f  * magnitude[i] +
+            0.25f * magnitude[i + 1];
+    }
+
 }
 
 void Analyze_Frequency_Spectrum(float32_t *magnitude)
@@ -110,13 +152,6 @@ void Test_FFT_With_Signal(float test_freq)
 
     // 处理数据
     Process_Data(simulated_adc_data);
-    
-    for(int i = 0; i < FFT_SIZE / 2; i++)
-    {
-        float32_t real = fft_output[2 * i];
-        float32_t imag = fft_output[2 * i + 1];
-        magnitude[i]  = sqrtf(real * real + imag * imag);
-    }
 
     // 分析频谱
     Analyze_Frequency_Spectrum(magnitude);
@@ -163,14 +198,21 @@ void Test_FFT_Multiple_Frequencies(void)
 /**
  * @brief 计算FFT结果的幅值(幅度谱)
  */
-void compute_fft_magnitude(void)
+void compute_rfft_magnitude(float32_t *fft_out, float32_t *mag, uint32_t fft_size)
 {
-    for(int i = 0; i < FFT_SIZE / 2; i++)
+    // DC
+    mag[0] = fabsf(fft_out[0]);
+
+    // 正常 bin
+    for (uint32_t i = 1; i < fft_size / 2; i++)
     {
-        float32_t real = fft_output[2 * i];
-        float32_t imag = fft_output[2 * i + 1];
-        magnitude[i]  = sqrtf(real * real + imag * imag);
+        float32_t real = fft_out[2 * i];
+        float32_t imag = fft_out[2 * i + 1];
+        mag[i] = sqrtf(real * real + imag * imag);
     }
+
+    // Nyquist
+    mag[fft_size / 2 - 1] = fabsf(fft_out[1]);
 }
 
 

@@ -10,11 +10,12 @@ void Ics43434_Out_Process(int32_t *data)
 {
     for(uint16_t i = 0; i < ICS43434_BUFFER_SIZE; i++)
     {
-        int32_t sample = data[i * 2] & 0xFFFFFF;
+        int32_t sample = (data[i * 2]) & 0xFFFFFF;
+        // PRINT("sample: %lx", sample);
 
-        if(sample & 0x800000)
+        if(sample & 0x00800000)
         {
-            sample = ics43434_out[i] | 0xFF000000;
+            sample = sample | 0xFF000000;
         }
 
         if(sample > -TIME_NOISE_GATE && sample < TIME_NOISE_GATE)
@@ -23,7 +24,7 @@ void Ics43434_Out_Process(int32_t *data)
         }
 
         ics43434_out[i] = sample;
-        // PRINT("ICS43434: %ld", ics43434_out[i]);
+        PRINT("ICS43434: %ld", ics43434_out[i]);
     }
 }
 

@@ -177,6 +177,10 @@ void StartdataProcessTask(void *argument)
     t_output_ptr = Ics43434_Get_Output_Ptr();
     Process_Data(t_output_ptr);
     t_magnitude = FFT_Get_Magnitude();
+    // for(int i = 0; i < 512; i++) 
+    // {
+    //     PRINT("magnitude: %f", t_magnitude[i]);
+    // }
     spectrum = WS2812B_map_fft_spectrum(t_magnitude);
     LED_DisplaySpectrum(spectrum);
   }
