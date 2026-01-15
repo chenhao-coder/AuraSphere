@@ -20,6 +20,9 @@ void Test_FFT_With_Signal(float test_freq);  // ĞÂÔö²âÊÔº¯Êı
 void Test_FFT_Multiple_Frequencies(void);
 void compute_rfft_magnitude(float32_t *fft_out, float32_t *mag, uint32_t fft_size);
 float32_t *FFT_Get_Magnitude(void);
+void Noise_Reset(void);
+void Noise_Collect(float *magnitude);
+int is_Noise_Calibrated(void);
 
 #ifdef __cplusplus
 }

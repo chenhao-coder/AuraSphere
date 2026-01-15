@@ -34,6 +34,7 @@
 #include "fft_processing.h"
 #include "audio_visual_processor.h"
 #include "ws2812b.h"
+#include "spectrum.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -169,6 +170,8 @@ void StartdataProcessTask(void *argument)
   float32_t *t_magnitude = NULL;
   uint8_t *spectrum = NULL;
 
+  Spectrum_SetMode(RHYTHM_MODEL4);
+
   for(;;)
   {
     osMessageQueueGet(FFT_queueHandle, &t_i2s2_buffer, NULL, osWaitForever);
@@ -177,12 +180,18 @@ void StartdataProcessTask(void *argument)
     t_output_ptr = Ics43434_Get_Output_Ptr();
     Process_Data(t_output_ptr);
     t_magnitude = FFT_Get_Magnitude();
+
+    if(!is_Noise_Calibrated())
+    {
+        Noise_Collect(t_magnitude);
+        continue;
+    }
     // for(int i = 0; i < 512; i++) 
     // {
     //     PRINT("magnitude: %f", t_magnitude[i]);
     // }
     spectrum = WS2812B_map_fft_spectrum(t_magnitude);
-    LED_DisplaySpectrum(spectrum);
+    Spectrum_Draw(spectrum);
   }
   /* USER CODE END StartdataProcessTask */
 }

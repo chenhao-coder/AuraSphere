@@ -12,6 +12,15 @@
 
 #define MID_KILL_THRESHOLD  0.35f      // 中频绝对熄灭阈值
 
+#define AMPLITUDE             50      //声音强度调整倍率（柱状高度倍率）
+#define MATRIX_SIDE           8         //每个矩阵的边长
+
+static uint8_t old_band_energy[FREQ_BINS];
+static uint8_t peak[FREQ_BINS];
+unsigned long peek_decay_time;
+unsigned long color_time;
+unsigned long change_color_time;
+
 /* ====================== 频段定义 ====================== */
 
 const uint16_t freq_bands[FREQ_BINS] =
@@ -29,14 +38,14 @@ const uint16_t freq_bands[FREQ_BINS] =
 
 static const float band_calib[FREQ_BINS] =
 {
-    0.25f,   // 400
-    0.25f,   // 800
-    0.25f,   // 1200
-    0.25f,   // 2000
-    1.3f,   // 3500
-    1.3f,   // 6000
-    1.3f,   // 10000
-    1.3f    // 16000
+    0.35f,   // 400 Hz   （低频压一点，防常亮）
+    0.55f,   // 800 Hz
+    0.75f,   // 1200 Hz
+    0.95f,   // 2000 Hz  （人声基准）
+    1.20f,   // 3500 Hz
+    1.45f,   // 6000 Hz
+    1.75f,   // 10000 Hz
+    2.10f    // 16000 Hz （只补偿，不夸张）
 };
 
 /* ====================== 状态变量 ====================== */
@@ -68,21 +77,6 @@ void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum)
     const float freq_res = (float)SAMPLE_RATE / FFT_SIZE;
 
     /* =================================================
-     * 1?? FFT 全局静音检测（真·安静）
-     * ================================================= */
-    float fft_energy = 0.0f;
-    for (int i = 2; i < FFT_SIZE / 2; i++)
-        fft_energy += magnitude[i] * magnitude[i];
-
-    if (fft_energy < 5e-4f)
-    {
-        memset(spectrum, 0, FREQ_BINS);
-        memset(last_spectrum, 0, FREQ_BINS);
-        lf_env = 0.0f;
-        return;
-    }
-
-    /* =================================================
      * 2?? 频段能量统计
      * ================================================= */
     for (int i = 2; i < FFT_SIZE / 2; i++)
@@ -97,7 +91,7 @@ void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum)
 
             if (freq > low && freq <= high)
             {
-                band_energy[b] += mag * mag;
+                band_energy[b] += mag;
                 band_peak[b] = fmaxf(band_peak[b], mag);
                 band_cnt[b]++;
                 break;
@@ -120,95 +114,48 @@ void map_fft_spectrum(const float32_t *magnitude, uint8_t *spectrum)
             band_energy[b] = rms * 0.6f + band_peak[b] * 0.4f;
     }
 
-    /* =================================================
-     * 4?? 噪声底学习 + Gate（关键）
-     * ================================================= */
-    float total_energy = 0.0f;
-
-    for (uint8_t b = 0; b < FREQ_BINS; b++)
-    {
-        if (band_noise[b] < 1e-6f)
-            band_noise[b] = band_energy[b];
-
-        /* 只在弱信号下学习 */
-        if (band_energy[b] < band_noise[b] * 2.5f)
-        {
-            band_noise[b] =
-                band_noise[b] * 0.998f +
-                band_energy[b] * 0.002f;
-        }
-
-        float gate = (b < 4) ? 4.0f : 3.0f;
-
-        if (band_energy[b] < band_noise[b] * gate)
-            band_energy[b] = 0.0f;
-
-        total_energy += band_energy[b];
-    }
-
-    if (total_energy < 0.01f)
-    {
-        memset(spectrum, 0, FREQ_BINS);
-        return;
-    }
-
-    /* =================================================
-     * 5?? 低频绝对抑制（安静不闪的保险）
-     * ================================================= */
-    for (uint8_t b = 0; b < 4; b++)
-    {
-        if (band_energy[b] < 0.02f)
-            band_energy[b] = 0.0f;
-    }
-
-    /* =================================================
-     * 6?? ? 低频瞬态包络（快起快灭）
-     * ================================================= */
-    float lf_energy = 0.0f;
-    for (uint8_t b = 0; b < 4; b++)
-        lf_energy += band_energy[b];
-
-    if (lf_energy > lf_env)
-        lf_env = lf_energy;     // 立刻跟上鼓点
-    else
-        lf_env *= 0.5f;         // 1~2 帧内熄灭
-
+    // TODO: 什么是AGC
     /* =================================================
      * 7?? AGC（只做轻微，不吃节奏）
      * ================================================= */
+    /* ================= AGC ================= */
     float frame_peak = 0.0f;
     for (uint8_t b = 0; b < FREQ_BINS; b++)
-        frame_peak = fmaxf(frame_peak, band_energy[b]);
+        frame_peak = fmaxf(frame_peak, band_peak[b]);
 
-    agc_peak = agc_peak * 0.96f + frame_peak * 0.04f;
-    if (agc_peak < 0.05f) agc_peak = 0.05f;
+    if (frame_peak > agc_peak)
+        agc_peak = agc_peak * 0.6f + frame_peak * 0.4f;
+    else
+        agc_peak *= 0.98f;
 
-    /* =================================================
-     * 8?? LED 映射（低频=鼓点，高频=装饰）
-     * ================================================= */
+    if (agc_peak < 0.02f)
+        agc_peak = 0.02f;
+
+    /* ================= LED 映射 ================= */
     for (uint8_t b = 0; b < FREQ_BINS; b++)
     {
-        float energy = (b < 4) ? lf_env : band_energy[b];
-
+        float energy;
+        if (b < 4)
+            energy = band_peak[b];      // ★ 关键：低频用峰值
+        else
+            energy = band_energy[b];
         float norm = energy / agc_peak;
-        norm = sqrtf(norm);                 // 视觉非线性
-        norm *= band_calib[b];
 
-        if (norm > 1.0f) norm = 1.0f;
-        if (norm < 0.02f) norm = 0.0f;
-
-        uint8_t level = (uint8_t)(norm * LED_ROWS);
-
-        /* ? 低频：禁止慢平滑（保留节奏） */
-        if (b >= 4)
+        if (b < 2)
         {
-            if (level > last_spectrum[b])
-                level = last_spectrum[b] * 0.6f + level * 0.4f;
-            else
-                level = last_spectrum[b] * 0.85f;
+            PRINT("norm: %f", norm);
+            if (norm < 0.5f) norm = 0.0f;
+            else norm = norm * norm;
+        }
+        else
+        {
+            norm = sqrtf(norm);
         }
 
-        if (level > LED_ROWS) level = LED_ROWS;
+        norm *= band_calib[b];
+        if (norm > 1.3f) norm = 1.3f;
+
+        uint8_t level = (uint8_t)(norm * LED_ROWS / 1.3f);
 
         spectrum[b] = level;
         last_spectrum[b] = level;
@@ -267,13 +214,198 @@ void Test_map_fft_spectrum(void)
     }
 }
 
+
+void map_fft_spectrum_test(const float32_t *magnitude, uint8_t *spectrum)
+{
+    /* ==================== 状态量 ==================== */
+    static float band_env[FREQ_BINS] = {0};       // 包络（时间平滑）
+    static float peak_hold[FREQ_BINS] = {0};      // 峰值保持
+
+    static float agc_peak = 0.08f;
+
+    float band_energy[FREQ_BINS] = {0};
+    float band_peak[FREQ_BINS]   = {0};
+    uint16_t band_cnt[FREQ_BINS] = {0};
+
+    const float freq_res = (float)SAMPLE_RATE / FFT_SIZE;
+
+    /* =================================================
+     * 1. 频段能量统计
+     * ================================================= */
+    for (int i = 2; i < FFT_SIZE / 2; i++)
+    {
+        float freq = i * freq_res;
+        float mag  = magnitude[i];
+
+        for (uint8_t b = 0; b < FREQ_BINS; b++)
+        {
+            float low  = (b == 0) ? 0 : freq_bands[b - 1];
+            float high = freq_bands[b];
+
+            if (freq > low && freq <= high)
+            {
+                band_energy[b] += mag;
+                band_peak[b] = fmaxf(band_peak[b], mag);
+                band_cnt[b]++;
+                break;
+            }
+        }
+    }
+
+    /* =================================================
+     * 2. RMS + 低频稳 / 高频亮
+     * ================================================= */
+    for (uint8_t b = 0; b < FREQ_BINS; b++)
+    {
+        if (band_cnt[b] == 0) continue;
+
+        float rms = sqrtf(band_energy[b] / band_cnt[b]);
+
+        if (b < 4)
+            band_energy[b] = rms;
+        else
+            band_energy[b] = rms * 0.6f + band_peak[b] * 0.4f;
+    }
+
+    /* =================================================
+     * 3. AGC（你原逻辑保留）
+     * ================================================= */
+    float frame_peak = 0.0f;
+    for (uint8_t b = 0; b < FREQ_BINS; b++)
+        frame_peak = fmaxf(frame_peak, band_peak[b]);
+
+    if (frame_peak > agc_peak)
+        agc_peak = agc_peak * 0.6f + frame_peak * 0.4f;
+    else
+        agc_peak *= 0.98f;
+
+    if (agc_peak < 0.02f)
+        agc_peak = 0.02f;
+
+    /* =================================================
+     * 4. 显示建模（核心灯效层）
+     * ================================================= */
+
+    #define ATTACK       0.35f
+    #define RELEASE      0.90f
+    #define LF_ATTACK    0.55f
+    #define LF_RELEASE   0.85f
+    #define PEAK_FALL    0.92f
+
+    for (uint8_t b = 0; b < FREQ_BINS; b++)
+    {
+        float energy;
+
+        if (b < 4)
+            energy = band_peak[b];   // 低频用峰值
+        else
+            energy = band_energy[b];
+
+        float raw = energy / agc_peak;
+
+        /* ========== Attack / Release ========== */
+        if (b < 3)
+        {
+            if (raw > band_env[b])
+                band_env[b] = band_env[b] * (1.0f - LF_ATTACK) + raw * LF_ATTACK;
+            else
+                band_env[b] *= LF_RELEASE;
+        }
+        else
+        {
+            if (raw > band_env[b])
+                band_env[b] = band_env[b] * (1.0f - ATTACK) + raw * ATTACK;
+            else
+                band_env[b] *= RELEASE;
+        }
+
+        float norm = band_env[b];
+
+        /* 你的原校准 */
+        norm *= band_calib[b];
+
+        if (norm > 1.3f) norm = 1.3f;
+        if (norm < 0.0f) norm = 0.0f;
+
+        uint8_t level = (uint8_t)(norm * LED_ROWS / 1.3f);
+
+        /* ========== 峰值保持 ========== */
+        if (level > peak_hold[b])
+            peak_hold[b] = level;
+        else
+            peak_hold[b] *= PEAK_FALL;
+
+        uint8_t peak_level = (uint8_t)(peak_hold[b]);
+
+        if (peak_level >= LED_ROWS)
+            peak_level = LED_ROWS - 1;
+
+        spectrum[b] = level;
+        last_spectrum[b] = level;
+    }
+}
+void magnitude_to_ws2812b(const float32_t *magnitude)
+{
+    static float env[FREQ_BINS] = {0};
+
+    float band_energy[FREQ_BINS] = {0};
+    uint16_t band_cnt[FREQ_BINS] = {0};
+
+    const float freq_res = (float)SAMPLE_RATE / FFT_SIZE;
+
+    /* ============ 1. 分频段 ============ */
+    for (int i = 2; i < FFT_SIZE / 2; i++)
+    {
+        float freq = i * freq_res;
+        float mag  = magnitude[i];
+
+        for (uint8_t b = 0; b < FREQ_BINS; b++)
+        {
+            float low  = (b == 0) ? 0 : freq_bands[b - 1];
+            float high = freq_bands[b];
+
+            if (freq > low && freq <= high)
+            {
+                band_energy[b] += mag;
+                band_cnt[b]++;
+                break;
+            }
+        }
+    }
+
+    for(int band = 0; band < FREQ_BINS; band++)
+    {
+        // 根据倍率缩放条形图高度
+        int bar_height = band_energy[band] / AMPLITUDE;
+        // PRINT("bar_height: %d", bar_height);
+        if(bar_height > MATRIX_SIDE) bar_height = MATRIX_SIDE;
+        // 旧高度与新高度值平均一下
+        bar_height = ((old_band_energy[band] * 1) + bar_height) / 2;
+
+        if(bar_height > peak[band]) 
+        {
+            peak[band] = bar_height;
+        }
+        old_band_energy[band] = bar_height;
+        
+    }
+    
+    // 10毫秒变换一次颜色
+    if((HAL_GetTick() - change_color_time) >= 10)
+    {
+        color_time++;
+        change_color_time = HAL_GetTick();
+    }
+}
+
 uint8_t *WS2812B_map_fft_spectrum(const float32_t *magnitude)
 {
-    map_fft_spectrum(magnitude, last_spectrum);
+    magnitude_to_ws2812b(magnitude);
     for(uint8_t band = 0; band < FREQ_BINS; band++)
     {
         // PRINT("spectrum: %d", last_spectrum[band]);
     }
 
-    return last_spectrum;
+    return old_band_energy;
 }
+

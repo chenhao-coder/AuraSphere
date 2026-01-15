@@ -115,8 +115,9 @@ int main(void)
   MX_I2S2_Init();
   /* USER CODE BEGIN 2 */
     FFT_Init();
+    // Test_FFT_Multiple_Frequencies();
   /* USER CODE END 2 */
-    Test_FFT_Multiple_Frequencies();
+    
   /* Init scheduler */
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();

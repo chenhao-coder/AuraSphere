@@ -3,8 +3,16 @@
 
 // #define FFT_TEST_MODE
 #define HPF_ALPHA        0.995f     // 高通系数（80~150Hz，和采样率有关）
-#define NOISE_GAIN       1.5f       // 噪声门限倍率
+#define ABS_NOISE_THRESHOLD  20.0f  // 绝对噪声门限
+#define NOISE_GAIN       2.0f       // 噪声门限倍率
 #define NOISE_BINS       10          // 用前10个bin估计噪声底
+
+#define NOISE_CALIBRATION_FRAMES    100
+
+static float noise_accum[FFT_SIZE / 2];
+static float noise_floor[FFT_SIZE / 2];
+static int noise_count = 0;
+static int noise_calibrated = 0;
 
 // FFT变量
 static float32_t fft_input[FFT_SIZE];
@@ -46,6 +54,7 @@ void Process_Data(int32_t *data)
         fft_input[i] -= mean;
     }
 
+    // TODO: 什么是高通滤波
     /* ===================== 3. 一阶高通滤波（去低频/风噪/抖动） ===================== */
     for(int i = 0; i< FFT_SIZE; i++)
     {
@@ -55,8 +64,9 @@ void Process_Data(int32_t *data)
         fft_input[i] = y;
     }
 #endif
-
-    /* ===================== 4. Hann 窗（你原来就是对的） ===================== */
+    
+    // TODO: 理解汉宁窗作用
+    /* ===================== 4. Hann 窗 ===================== */
     for (int i = 0; i < FFT_SIZE; i++)
     {
         fft_input[i] *= 0.5f * (1.0f - arm_cos_f32(2 * PI * i / (FFT_SIZE - 1)));
@@ -68,27 +78,27 @@ void Process_Data(int32_t *data)
     /* ===================== 6. 幅值谱 ===================== */
     compute_rfft_magnitude(fft_output, magnitude, FFT_SIZE);
 
-    /* ===================== 7. 自适应噪声门限（FFT 后去底噪） ===================== */
-    float32_t noise_floor;
-    arm_mean_f32(&magnitude[1], NOISE_BINS, &noise_floor);
+    /* ===================== 7. 自适应噪声门限（FFT 后去底噪）+ 绝对噪声门限 ===================== */
 
-    for (int i = 1; i < FFT_SIZE / 2; i++)
+    for (int i = 0; i < FFT_SIZE / 2; i++)
     {
-        if (magnitude[i] < noise_floor * NOISE_GAIN)
+        // PRINT("magnitue[%d] = %f", i, magnitude[i]);
+        float32_t clean = magnitude[i];
+
+        if(noise_calibrated)
         {
-            magnitude[i] = 0.0f;
+            clean = magnitude[i] - noise_floor[i] * NOISE_GAIN;
+            
+            if(clean < 0)
+                clean = 0;
         }
-    }
+        // if (clean < ABS_NOISE_THRESHOLD)
+        // {
+        //     clean = 0;
+        // }
 
-    /* ===================== 8. 频谱平滑（显示/能量稳定） ===================== */
-    for (int i = 1; i < FFT_SIZE / 2 - 1; i++)
-    {
-        magnitude[i] =
-            0.25f * magnitude[i - 1] +
-            0.5f  * magnitude[i] +
-            0.25f * magnitude[i + 1];
+        magnitude[i] = clean;
     }
-
 }
 
 void Analyze_Frequency_Spectrum(float32_t *magnitude)
@@ -215,8 +225,36 @@ void compute_rfft_magnitude(float32_t *fft_out, float32_t *mag, uint32_t fft_siz
     mag[fft_size / 2 - 1] = fabsf(fft_out[1]);
 }
 
+void Noise_Reset(void) 
+{
+    memset(noise_accum, 0, sizeof(noise_accum));
+    noise_count = 0;
+    noise_calibrated = 0;
+}
 
+void Noise_Collect(float *magnitude)
+{
+    for(int i = 0; i < FFT_SIZE / 2; i++) 
+    {
+        noise_accum[i] += magnitude[i];
+    }
+    noise_count++;
 
+    if(noise_count >= NOISE_CALIBRATION_FRAMES)
+    {
+        for(int i = 0; i < FFT_SIZE/ 2; i++)
+        {
+            noise_floor[i] = noise_accum[i] / noise_count;
+        }
+
+        noise_calibrated = 1;
+    }
+}
+
+int is_Noise_Calibrated(void)
+{
+    return noise_calibrated;
+}
 
 
 

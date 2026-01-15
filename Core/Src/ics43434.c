@@ -24,7 +24,7 @@ void Ics43434_Out_Process(int32_t *data)
         }
 
         ics43434_out[i] = sample;
-        PRINT("ICS43434: %ld", ics43434_out[i]);
+        // PRINT("ICS43434: %ld", ics43434_out[i]);
     }
 }
 
