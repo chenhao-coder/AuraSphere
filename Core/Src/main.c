@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "dma.h"
 #include "i2s.h"
+#include "rtc.h"
 #include "spi.h"
 #include "usart.h"
 #include "gpio.h"
@@ -31,6 +32,7 @@
 #include "ws2812b.h"
 #include "fft_processing.h"
 #include "audio_visual_processor.h"
+#include "clock.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,7 +42,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TEST_MODE_EN        1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -113,11 +115,25 @@ int main(void)
   MX_USART1_UART_Init();
   MX_SPI1_Init();
   MX_I2S2_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
     FFT_Init();
+
+#if (TEST_MODE_EN == 1)
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == RESET)
+    {
+        printf("? LSE NOT READY !!!\r\n");
+    }
+    else
+    {
+        printf("? LSE READY\r\n");
+    }
+    // 2026-01-28 20:30:00 (����ʱ��)
+    RTC_SetAndVerifyTest(1769603400);
     // Test_FFT_Multiple_Frequencies();
+#endif
   /* USER CODE END 2 */
-    
+
   /* Init scheduler */
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
@@ -158,11 +174,17 @@ void SystemClock_Config(void)
 
   while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
 
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_HIGH);
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_LSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 5;
