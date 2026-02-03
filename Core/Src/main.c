@@ -33,6 +33,7 @@
 #include "fft_processing.h"
 #include "audio_visual_processor.h"
 #include "clock.h"
+#include "matrix.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -131,6 +132,13 @@ int main(void)
     // 2026-01-28 20:30:00 (����ʱ��)
     RTC_SetAndVerifyTest(1769603400);
     // Test_FFT_Multiple_Frequencies();
+
+    Matrix_Clear();
+
+    Color red = {255, 0, 0};
+    Matrix_DrawText(1, 1, "C", red);
+    while(1)
+    {}
 #endif
   /* USER CODE END 2 */
 

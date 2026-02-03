@@ -1,6 +1,12 @@
 #include "matrix.h"
-#include "ws2812b.h"
+#include "font5x7.h"
 #include <string.h>
+
+#include "ws2812b.h"
+
+#define FONT_W      5
+#define FONT_H      7
+#define FONT_GAP    1
 
 static inline int XYtoIndex(int x, int y)
 {
@@ -41,4 +47,38 @@ void Matrix_DrawFastVLine(int x, int y, int h, Color c)
 void Matrix_Show(void)
 {
     WS2812B_Update();
+}
+
+void Matrix_DrawChar(int x, int y, char ch, Color c)
+{
+    if(ch < 32 || ch > 126) return;
+
+    const uint8_t *bitmap = Font5x7[ch - 32];
+
+    for(int col = 0; col < FONT_W; col++)
+    {
+        uint8_t bits = bitmap[col];
+
+        for(int row = 0; row < FONT_H; row++)
+        {
+            if(bits & ( 1 << row))
+            {
+                Matrix_SetPixel(x + col, y + row, c);
+            }
+        }
+    }
+}
+
+void Matrix_DrawText(int x, int y, const char *text, Color c)
+{
+    int cursorX = x;
+
+    while(*text)
+    {
+        Matrix_DrawChar(cursorX, y, *text, c);
+        cursorX += FONT_W + FONT_GAP;
+        text++;
+    }
+
+    Matrix_Show();
 }

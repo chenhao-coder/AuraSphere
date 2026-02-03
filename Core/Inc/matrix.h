@@ -21,6 +21,8 @@ void Matrix_SetPixel(int x, int y, Color c);
 void Matrix_DrawVBar(int x, int height, Color c);
 void Matrix_DrawFastVLine(int x, int y, int h, Color c);
 void Matrix_Show(void);
+void Matrix_DrawFastVLine(int x, int y, int h, Color c);
+void Matrix_DrawText(int x, int y, const char *text, Color c);
 
 #ifdef __cplusplus
 }
