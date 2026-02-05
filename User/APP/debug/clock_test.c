@@ -1,4 +1,4 @@
-#include "clock.h"
+#include "clock_test.h"
 #include <time.h>
 #include <stdio.h>
 

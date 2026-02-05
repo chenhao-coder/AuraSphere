@@ -87,7 +87,7 @@ void LED_DisplaySpectrum(uint8_t *spectrum)
 
         for(uint8_t y = 0; y < height; y++)
         {
-            uint8_t led_index = x + y * LED_ROWS;  // ← 普通布线正确公式
+            uint8_t led_index = y + x * LED_ROWS;  // ← 普通布线正确公式
 
             // 渐变 & 限亮到 40
             uint8_t t = (y * 255) / (LED_ROWS - 1);
@@ -108,8 +108,20 @@ void LED_DisplaySpectrum(uint8_t *spectrum)
 
 void LED_DisplaySpectrum_Test(void)
 {
-    uint8_t spectrum[LED_COLS] = {2, 4, 6, 8, 7, 5, 3, 1};
+    uint8_t spectrum[LED_COLS] = {1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1};
     LED_DisplaySpectrum(spectrum);
 }
 
+void Test_Ws2812_Order(void)
+{
+    WS2812B_Color_t c = {255, 0, 0}; 
+    
+    for(int i = 0; i < LED_ROWS * LED_COLS; i++)
+    {
+        WS2812B_Clear();
+        WS2812B_SetColor(i, c.red, c.green, c.blue);
+        WS2812B_Update();
+        HAL_Delay(300);
+    }
+}
 

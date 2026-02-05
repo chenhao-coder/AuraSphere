@@ -121,6 +121,9 @@ int main(void)
     FFT_Init();
 
 #if (TEST_MODE_EN == 1)
+    LED_DisplaySpectrum_Test();
+    HAL_Delay(3000);
+    Test_Ws2812_Order();
     if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == RESET)
     {
         printf("? LSE NOT READY !!!\r\n");

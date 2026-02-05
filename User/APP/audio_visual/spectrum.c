@@ -48,6 +48,8 @@ static Color getGradientColor(uint8_t y)
     c.r = (c.r * 40) / 255;
     c.g = (c.g * 40) / 255;
     c.b = (c.b * 40) / 255;
+
+    return c;
 }
 
 void Spectrum_SetMode(RhythmMode mode)

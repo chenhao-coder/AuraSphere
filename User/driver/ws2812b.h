@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 #ifndef LED_COLS
-#define LED_COLS            8
+#define LED_COLS            16
 #endif
 
 #define NUM_LEDS         (LED_ROWS * LED_COLS)
@@ -41,6 +41,7 @@ void WS2812B_Update(void);
 void WS2812B_Clear(void);
 void LED_DisplaySpectrum(uint8_t *spectrum);
 void LED_DisplaySpectrum_Test(void);
+void Test_Ws2812_Order(void);
 
 #ifdef __cplusplus
 }

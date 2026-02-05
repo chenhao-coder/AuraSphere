@@ -4,6 +4,13 @@
             "name": "Win32",
             "includePath": [
                 "${workspaceFolder}/Core/Inc",
+                "${workspaceFolder}/User/APP/debug",
+                "${workspaceFolder}/User/APP/audio",
+                "${workspaceFolder}/User/APP/UI",
+                "${workspaceFolder}/User/APP/audio_visual",
+                "${workspaceFolder}/User/BSP",
+                "${workspaceFolder}/User/middleware",
+                "${workspaceFolder}/User/driver",
                 "${workspaceFolder}/Drivers/STM32H7xx_HAL_Driver/Inc",
                 "${workspaceFolder}/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy",
                 "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/include",

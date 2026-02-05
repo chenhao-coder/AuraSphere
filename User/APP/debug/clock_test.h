@@ -1,5 +1,5 @@
-#ifndef CLOCK_H
-#define CLOCK_H
+#ifndef CLOCK_TEST_H
+#define CLOCK_TEST_H
 
 #ifdef __cplusplus
 extern "C" {
