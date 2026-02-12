@@ -32,7 +32,7 @@
 #include "ws2812b.h"
 #include "fft_processing.h"
 #include "audio_visual_processor.h"
-#include "clock.h"
+// #include "clock.h"
 #include "matrix.h"
 /* USER CODE END Includes */
 
@@ -43,7 +43,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TEST_MODE_EN        1
+#define TEST_MODE_EN        0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -118,7 +118,6 @@ int main(void)
   MX_I2S2_Init();
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
-    FFT_Init();
 
 #if (TEST_MODE_EN == 1)
     LED_DisplaySpectrum_Test();
@@ -188,7 +187,7 @@ void SystemClock_Config(void)
   /** Configure LSE Drive Capability
   */
   HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_HIGH);
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.

@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "main.h"
 #include "arm_math.h"
 
 /* ================= ≈‰÷√ ================= */

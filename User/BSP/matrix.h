@@ -7,7 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 
-#define MATRIX_W    8
+#define MATRIX_W    16
 #define MATRIX_H    8
 
 typedef struct {

@@ -44,7 +44,6 @@ typedef void (* i2s_dma_m0_m1_callback_func)(void);
 
 typedef struct {
     int32_t i2s2_data[I2S2_BUFFER_SIZE + 2];
-    volatile uint8_t data_ready;
 }i2s2_buffer_t;
 /* USER CODE END Private defines */
 
@@ -54,8 +53,6 @@ void MX_I2S2_Init(void);
 HAL_StatusTypeDef HAL_I2S_Receive_DMA_modiy(I2S_HandleTypeDef *hi2s, uint16_t *pData0, uint16_t *pdata1, uint16_t Size);
 i2s2_buffer_t * I2S2_Get_Buffer_Addr(void);
 int register_callback(i2s_dma_m0_m1_callback_func func, uint8_t mode);
-void i2s_dma_m0_callback(void);
-void i2s_dma_m1_callback(void);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

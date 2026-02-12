@@ -25,8 +25,6 @@
 #include <string.h>
 
 static i2s2_buffer_t i2s2_buffer[2];
-static volatile uint8_t current_buffer = 0;
-static volatile uint8_t data_ready_flag = 0;
 
 static i2s_dma_m0_m1_callback_func i2s_dma_m0_callback_func = NULL;
 static i2s_dma_m0_m1_callback_func i2s_dma_m1_callback_func = NULL;
@@ -291,8 +289,6 @@ HAL_StatusTypeDef HAL_I2S_Receive_DMA_modiy(I2S_HandleTypeDef *hi2s, uint16_t *p
 static void I2S2_Buffer_Init(void)
 {
     memset((void *)i2s2_buffer, 0, sizeof(i2s2_buffer));
-    current_buffer = 0;
-    data_ready_flag = 0;
 
     printf("i2s2_buffer Initialized - Sample Rate: %d Hz\r\n", I2S2_SAMPLE_RATE);
 }
@@ -319,19 +315,4 @@ int register_callback(i2s_dma_m0_m1_callback_func func, uint8_t mode)
     return 0;       // success
 }
 
-void i2s_dma_m0_callback(void)
-{
-    for(int i = 0; i < I2S2_BUFFER_SIZE; i++)
-    {
-        printf("0x%08lX ", i2s2_buffer[0].i2s2_data[i]);
-    }
-}
-
-void i2s_dma_m1_callback(void)
-{
-    for(int i = 0; i < I2S2_BUFFER_SIZE; i++)
-    {
-        printf("0x%08lX ", i2s2_buffer[1].i2s2_data[i]);
-    }
-}
 /* USER CODE END 1 */

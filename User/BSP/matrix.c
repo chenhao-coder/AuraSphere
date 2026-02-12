@@ -10,7 +10,7 @@
 
 static inline int XYtoIndex(int x, int y)
 {
-    return y * MATRIX_W + x;
+    return x * MATRIX_H + y;
 }
 
 void Matrix_Clear(void)

@@ -27,6 +27,7 @@ void AudioRing_PushFromISR(AudioRingBuffer_t *rb, const int32_t *pcm)
         rb->read_idx = (rb->read_idx + 1) % RING_DEPTH;
         rb->count--;
         rb->drop_count++;
+        printf(">>> AudioRing_PushFromISR: discard a frame of data!\r\n");
     }
 
     AudioFrame_t *f = &rb->frames[rb->write_idx];
