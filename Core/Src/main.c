@@ -43,7 +43,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TEST_MODE_EN        0
+#define TEST_MODE_EN        1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -118,29 +118,27 @@ int main(void)
   MX_I2S2_Init();
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
-
-#if (TEST_MODE_EN == 1)
-    LED_DisplaySpectrum_Test();
-    HAL_Delay(3000);
-    Test_Ws2812_Order();
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == RESET)
-    {
-        printf("? LSE NOT READY !!!\r\n");
-    }
-    else
-    {
-        printf("? LSE READY\r\n");
-    }
-    // 2026-01-28 20:30:00 (����ʱ��)
-    RTC_SetAndVerifyTest(1769603400);
-    // Test_FFT_Multiple_Frequencies();
-
     Matrix_Clear();
+#if (TEST_MODE_EN == 1)
+    // LED_DisplaySpectrum_Test();
+    // HAL_Delay(3000);
+    // Test_Ws2812_Order();
+    // if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == RESET)
+    // {
+    //     printf("? LSE NOT READY !!!\r\n");
+    // }
+    // else
+    // {
+    //     printf("? LSE READY\r\n");
+    // }
+    // // 2026-01-28 20:30:00 (����ʱ��)
+    // RTC_SetAndVerifyTest(1769603400);
+    // // Test_FFT_Multiple_Frequencies();
 
-    Color red = {255, 0, 0};
-    Matrix_DrawText(1, 1, "C", red);
-    while(1)
-    {}
+    // Color red = {255, 0, 0};
+    // Matrix_DrawText(1, 1, "CAR", red);
+    // while(1)
+    // {}
 #endif
   /* USER CODE END 2 */
 

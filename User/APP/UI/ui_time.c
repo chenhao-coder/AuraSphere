@@ -8,7 +8,7 @@ Color weekColor;
 
 void UI_DrawTime(const TimeInfo *t, TimePage_t page)
 {
-    char buf[9];
+    char buf[16];
 
     Matrix_Clear();
 
@@ -50,7 +50,7 @@ void UI_DrawTime(const TimeInfo *t, TimePage_t page)
         for (int i = 1; i <= 7; i++)
         {
             Color c = (i == t->week) ? mainColor : weekColor;
-            Matrix_DrawFastHLine(3 + (i - 1) * 3, 7, 2, c);
+            Matrix_DrawFastVLine(3 + (i - 1) * 3, 7, 2, c);
         }
     }
 

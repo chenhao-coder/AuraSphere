@@ -19,6 +19,8 @@ typedef struct
     uint8_t peak[FREQ_BINS];    // ·åÖµ
 } SpectrumData;
 
+extern SpectrumData g_spectrum;
+
 /* ===================== ½Ó¿Ú ===================== */
 
 /**

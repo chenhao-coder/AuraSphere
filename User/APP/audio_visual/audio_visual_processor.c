@@ -33,6 +33,8 @@ static const uint16_t freq_bands[FREQ_BINS] =
 
 static uint8_t last_bar[FREQ_BINS];
 
+SpectrumData g_spectrum;
+
 /* ===================== 接口实现 ===================== */
 
 void AVP_Init(void)

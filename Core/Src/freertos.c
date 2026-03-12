@@ -35,6 +35,7 @@
 #include "audio_visual_processor.h"
 #include "ws2812b.h"
 #include "spectrum.h"
+#include "ui_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,13 +57,6 @@ static void I2S_DMAxM1Cplt_Callback(void);
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 static FFT_Handle g_fft;
-
-// 这个结构体的目的: 便于后续扩展，如时间戳，模式，颜色等
-typedef struct
-{
-    /* data */
-    SpectrumData spectrum;
-} UIMessage_t;
 
 /* USER CODE END Variables */
 
@@ -140,7 +134,7 @@ void MX_FREERTOS_Init(void)
 
     /* Create the queue(s) */
     /* creation of FFT_queue */
-    FFT_queueHandle = osMessageQueueNew(3, sizeof(UIMessage_t), &FFT_queue_attributes);
+    FFT_queueHandle = osMessageQueueNew(3, sizeof(UiMsg_t), &FFT_queue_attributes);
 
     /* USER CODE BEGIN RTOS_QUEUES */
     /* add queues, ... */
@@ -205,7 +199,6 @@ void StartdataProcessTask(void *argument)
     /* Infinite loop */
     Ics43434_Frame_t *frame;
     SpectrumData out;
-    UIMessage_t t_msg;
     const float32_t *t_magnitude = NULL;
 
     register_callback(I2S_DMAxM0Cplt_Callback, 0);
@@ -216,7 +209,6 @@ void StartdataProcessTask(void *argument)
 
     for (;;)
     {
-
         if (Ics43434_GetFrame(&frame))
         {
             // printf(">>>StartdataProcessTask: Ics43434_GetFrame is ok\r\n");
@@ -230,13 +222,12 @@ void StartdataProcessTask(void *argument)
                 {
                     // printf(">>> Ics43434_GetFrame: t_magnitude is not NULL!\r\n");
                     AVP_Process(t_magnitude, &out);
-                    // 
-                    t_msg.spectrum = out;
-                    osMessageQueuePut(FFT_queueHandle, &t_msg, 0, 0);
+                    taskENTER_CRITICAL();
+                    g_spectrum = out;
+                    taskEXIT_CRITICAL();
                 }
             }
         }
-
         osDelay(1);
     }
     /* USER CODE END StartdataProcessTask */
@@ -252,15 +243,30 @@ void StartdataProcessTask(void *argument)
 void StartUIProcessTask(void *argument)
 {
     /* USER CODE BEGIN StartUIProcessTask */
-    UIMessage_t t_msg;
+    UiContext ctx = {
+        .current_page = UI_PAGE_STARTUP,
+        .tick = 0,
+    };
+
+    UiMsg_t msg;
+
+    ui_page_enter(ctx.current_page);
 
     /* Infinite loop */
     for (;;)
     {
-        if(osMessageQueueGet(FFT_queueHandle, &t_msg, NULL, osWaitForever) == osOK)
+        /* 处理 UI 消息（非阻塞）*/
+        while(osMessageQueueGet(FFT_queueHandle, &msg, NULL, 0) == osOK)
         {
-            Spectrum_Draw(t_msg.spectrum.bar);
+            ui_handle_msg(&ctx, &msg);
         }
+
+        /* 绘制当前页面 */
+        ui_page_draw(&ctx);
+
+        /* UI 节拍 */
+        ctx.tick++;
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
     /* USER CODE END StartUIProcessTask */
 }
