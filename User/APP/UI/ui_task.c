@@ -69,11 +69,6 @@ static void ui_draw_rhythm(UiContext *ctx)
     Spectrum_Draw(snapshot.bar);
 }
 
-static void ui_draw_brightness(UiContext *ctx)
-{
-
-}
-
 void ui_page_enter(UiPage_t page)
 {
     switch(page)

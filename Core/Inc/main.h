@@ -63,6 +63,8 @@ void Error_Handler(void);
 #define LCS_43434_LR_Right_GPIO_Port GPIOB
 #define ICS_43434_LR_Left_Pin GPIO_PIN_13
 #define ICS_43434_LR_Left_GPIO_Port GPIOB
+#define ESP_RST_Pin GPIO_PIN_7
+#define ESP_RST_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
 

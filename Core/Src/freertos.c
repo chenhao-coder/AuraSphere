@@ -36,6 +36,8 @@
 #include "ws2812b.h"
 #include "spectrum.h"
 #include "ui_task.h"
+#include "at_driver_test.h"
+#include "mqtt_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,43 +61,51 @@ static void I2S_DMAxM1Cplt_Callback(void);
 static FFT_Handle g_fft;
 
 /* USER CODE END Variables */
-
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
-    .name = "defaultTask",
-    .stack_size = 128 * 4,
-    .priority = (osPriority_t)osPriorityNormal,
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for dataProcessTask */
 osThreadId_t dataProcessTaskHandle;
 const osThreadAttr_t dataProcessTask_attributes = {
-    .name = "dataProcessTask",
-    .stack_size = 512 * 4,
-    .priority = (osPriority_t)osPriorityHigh,
+  .name = "dataProcessTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for UIProcessTask */
 osThreadId_t UIProcessTaskHandle;
 const osThreadAttr_t UIProcessTask_attributes = {
-    .name = "UIProcessTask",
-    .stack_size = 512 * 4,
-    .priority = (osPriority_t)osPriorityNormal,
+  .name = "UIProcessTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for SystemTask */
 osThreadId_t SystemTaskHandle;
 const osThreadAttr_t SystemTask_attributes = {
-    .name = "SystemTask",
-    .stack_size = 512 * 4,
-    .priority = (osPriority_t)osPriorityLow,
+  .name = "SystemTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for OTATask */
+osThreadId_t OTATaskHandle;
+const osThreadAttr_t OTATask_attributes = {
+  .name = "OTATask",
+  .stack_size = 2048 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for FFT_queue */
 osMessageQueueId_t FFT_queueHandle;
 const osMessageQueueAttr_t FFT_queue_attributes = {
-    .name = "FFT_queue"};
+  .name = "FFT_queue"
+};
 /* Definitions for GeneralEvent */
 osEventFlagsId_t GeneralEventHandle;
 const osEventFlagsAttr_t GeneralEvent_attributes = {
-    .name = "GeneralEvent"};
+  .name = "GeneralEvent"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -106,64 +116,68 @@ void StartDefaultTask(void *argument);
 void StartdataProcessTask(void *argument);
 void StartUIProcessTask(void *argument);
 void StartSystemTask(void *argument);
+void StartOTATask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
- * @brief  FreeRTOS initialization
- * @param  None
- * @retval None
- */
-void MX_FREERTOS_Init(void)
-{
-    /* USER CODE BEGIN Init */
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
+void MX_FREERTOS_Init(void) {
+  /* USER CODE BEGIN Init */
 
-    /* USER CODE END Init */
+  /* USER CODE END Init */
 
-    /* USER CODE BEGIN RTOS_MUTEX */
+  /* USER CODE BEGIN RTOS_MUTEX */
     /* add mutexes, ... */
-    /* USER CODE END RTOS_MUTEX */
+  /* USER CODE END RTOS_MUTEX */
 
-    /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
     /* add semaphores, ... */
-    /* USER CODE END RTOS_SEMAPHORES */
+  /* USER CODE END RTOS_SEMAPHORES */
 
-    /* USER CODE BEGIN RTOS_TIMERS */
+  /* USER CODE BEGIN RTOS_TIMERS */
     /* start timers, add new ones, ... */
-    /* USER CODE END RTOS_TIMERS */
+  /* USER CODE END RTOS_TIMERS */
 
-    /* Create the queue(s) */
-    /* creation of FFT_queue */
-    FFT_queueHandle = osMessageQueueNew(3, sizeof(UiMsg_t), &FFT_queue_attributes);
+  /* Create the queue(s) */
+  /* creation of FFT_queue */
+  FFT_queueHandle = osMessageQueueNew (3, sizeof(i2s2_buffer_t *), &FFT_queue_attributes);
 
-    /* USER CODE BEGIN RTOS_QUEUES */
+  /* USER CODE BEGIN RTOS_QUEUES */
     /* add queues, ... */
-    /* USER CODE END RTOS_QUEUES */
+  /* USER CODE END RTOS_QUEUES */
 
-    /* Create the thread(s) */
-    /* creation of defaultTask */
-    defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-    /* creation of dataProcessTask */
-    dataProcessTaskHandle = osThreadNew(StartdataProcessTask, NULL, &dataProcessTask_attributes);
+  /* creation of dataProcessTask */
+  // dataProcessTaskHandle = osThreadNew(StartdataProcessTask, NULL, &dataProcessTask_attributes);
 
-    /* creation of UIProcessTask */
-    UIProcessTaskHandle = osThreadNew(StartUIProcessTask, NULL, &UIProcessTask_attributes);
+  /* creation of UIProcessTask */
+  // UIProcessTaskHandle = osThreadNew(StartUIProcessTask, NULL, &UIProcessTask_attributes);
 
-    /* creation of SystemTask */
-    SystemTaskHandle = osThreadNew(StartSystemTask, NULL, &SystemTask_attributes);
+  /* creation of SystemTask */
+  // SystemTaskHandle = osThreadNew(StartSystemTask, NULL, &SystemTask_attributes);
 
-    /* USER CODE BEGIN RTOS_THREADS */
+  /* creation of OTATask */
+  OTATaskHandle = osThreadNew(MQTT_Task, NULL, &OTATask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
-    /* USER CODE END RTOS_THREADS */
+  /* USER CODE END RTOS_THREADS */
 
-    /* Create the event(s) */
-    /* creation of GeneralEvent */
-    GeneralEventHandle = osEventFlagsNew(&GeneralEvent_attributes);
+  /* Create the event(s) */
+  /* creation of GeneralEvent */
+  GeneralEventHandle = osEventFlagsNew(&GeneralEvent_attributes);
 
-    /* USER CODE BEGIN RTOS_EVENTS */
+  /* USER CODE BEGIN RTOS_EVENTS */
     /* add events, ... */
-    /* USER CODE END RTOS_EVENTS */
+  /* USER CODE END RTOS_EVENTS */
+
 }
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -175,7 +189,7 @@ void MX_FREERTOS_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-    /* USER CODE BEGIN StartDefaultTask */
+  /* USER CODE BEGIN StartDefaultTask */
     printf(">>> StartDefaultTask: is run!\r\n");
 
     /* Infinite loop */
@@ -183,7 +197,7 @@ void StartDefaultTask(void *argument)
     {
         osDelay(1);
     }
-    /* USER CODE END StartDefaultTask */
+  /* USER CODE END StartDefaultTask */
 }
 
 /* USER CODE BEGIN Header_StartdataProcessTask */
@@ -195,7 +209,7 @@ void StartDefaultTask(void *argument)
 /* USER CODE END Header_StartdataProcessTask */
 void StartdataProcessTask(void *argument)
 {
-    /* USER CODE BEGIN StartdataProcessTask */
+  /* USER CODE BEGIN StartdataProcessTask */
     /* Infinite loop */
     Ics43434_Frame_t *frame;
     SpectrumData out;
@@ -230,7 +244,7 @@ void StartdataProcessTask(void *argument)
         }
         osDelay(1);
     }
-    /* USER CODE END StartdataProcessTask */
+  /* USER CODE END StartdataProcessTask */
 }
 
 /* USER CODE BEGIN Header_StartUIProcessTask */
@@ -242,7 +256,7 @@ void StartdataProcessTask(void *argument)
 /* USER CODE END Header_StartUIProcessTask */
 void StartUIProcessTask(void *argument)
 {
-    /* USER CODE BEGIN StartUIProcessTask */
+  /* USER CODE BEGIN StartUIProcessTask */
     UiContext ctx = {
         .current_page = UI_PAGE_STARTUP,
         .tick = 0,
@@ -255,20 +269,20 @@ void StartUIProcessTask(void *argument)
     /* Infinite loop */
     for (;;)
     {
-        /* ´¦Àí UI ÏûÏ¢£¨·Ç×èÈû£©*/
+        /* ï¿½ï¿½ï¿½ï¿½ UI ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½*/
         while(osMessageQueueGet(FFT_queueHandle, &msg, NULL, 0) == osOK)
         {
             ui_handle_msg(&ctx, &msg);
         }
 
-        /* »æÖÆµ±Ç°Ò³Ãæ */
+        /* ï¿½ï¿½ï¿½Æµï¿½Ç°Ò³ï¿½ï¿½ */
         ui_page_draw(&ctx);
 
-        /* UI ½ÚÅÄ */
+        /* UI ï¿½ï¿½ï¿½ï¿½ */
         ctx.tick++;
         vTaskDelay(pdMS_TO_TICKS(30));
     }
-    /* USER CODE END StartUIProcessTask */
+  /* USER CODE END StartUIProcessTask */
 }
 
 /* USER CODE BEGIN Header_StartSystemTask */
@@ -280,13 +294,31 @@ void StartUIProcessTask(void *argument)
 /* USER CODE END Header_StartSystemTask */
 void StartSystemTask(void *argument)
 {
-    /* USER CODE BEGIN StartSystemTask */
+  /* USER CODE BEGIN StartSystemTask */
     /* Infinite loop */
     for (;;)
     {
         osDelay(1);
     }
-    /* USER CODE END StartSystemTask */
+  /* USER CODE END StartSystemTask */
+}
+
+/* USER CODE BEGIN Header_StartOTATask */
+/**
+* @brief Function implementing the OTATask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartOTATask */
+void StartOTATask(void *argument)
+{
+  /* USER CODE BEGIN StartOTATask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartOTATask */
 }
 
 /* Private application code --------------------------------------------------*/
@@ -308,3 +340,4 @@ static void I2S_DMAxM1Cplt_Callback(void)
 }
 
 /* USER CODE END Application */
+

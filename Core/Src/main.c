@@ -19,8 +19,11 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "crc.h"
 #include "dma.h"
 #include "i2s.h"
+#include "iwdg.h"
+#include "mbedtls.h"
 #include "rtc.h"
 #include "spi.h"
 #include "usart.h"
@@ -34,16 +37,28 @@
 #include "audio_visual_processor.h"
 // #include "clock.h"
 #include "matrix.h"
+#include "at_driver.h"
+#include <sys/time.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+int _gettimeofday(struct timeval *tv, void *tz)
+{
+    if (tv)
+    {
+        /* 获取从系统启动到当前的毫秒数 */
+        uint32_t ticks = HAL_GetTick();
+        tv->tv_sec  = ticks / 1000;
+        tv->tv_usec = (ticks % 1000) * 1000;
+    }
+    return 0;
+}
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TEST_MODE_EN        1
+#define TEST_MODE_EN 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,7 +77,7 @@
 
 PUTCHAR_PROTOTYPE
 {
-    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
     return ch;
 }
 /* USER CODE END PV */
@@ -116,9 +131,15 @@ int main(void)
   MX_USART1_UART_Init();
   MX_SPI1_Init();
   MX_I2S2_Init();
-  MX_RTC_Init();
+  // MX_RTC_Init();
+  // MX_CRC_Init();
+  // MX_IWDG1_Init();
+  MX_USART3_UART_Init();
+  /* Call PreOsInit function */
+  MX_MBEDTLS_Init();
   /* USER CODE BEGIN 2 */
     Matrix_Clear();
+
 #if (TEST_MODE_EN == 1)
     // LED_DisplaySpectrum_Test();
     // HAL_Delay(3000);
@@ -190,9 +211,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE
+                              |RCC_OSCILLATORTYPE_LSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 5;

@@ -4,10 +4,12 @@
             "name": "Win32",
             "includePath": [
                 "${workspaceFolder}/Core/Inc",
+                "${workspaceFolder}/User/middleware",
                 "${workspaceFolder}/User/APP/debug",
                 "${workspaceFolder}/User/APP/audio",
                 "${workspaceFolder}/User/APP/UI",
                 "${workspaceFolder}/User/APP/audio_visual",
+                "${workspaceFolder}/User/APP/OTA",
                 "${workspaceFolder}/User/BSP",
                 "${workspaceFolder}/User/middleware",
                 "${workspaceFolder}/User/driver",
@@ -15,7 +17,8 @@
                 "${workspaceFolder}/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy",
                 "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/include",
                 "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
-                "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7",
+                "${workspaceFolder}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F",
+                "${workspaceFolder}/Middlewares/Third_Party/mbedTLS/include/mbedtls",
                 "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32H7xx/Include",
                 "${workspaceFolder}/Drivers/CMSIS/Include",
                 "${workspaceFolder}/Middlewares/ST/ARM/DSP/Inc"
