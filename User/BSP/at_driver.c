@@ -10,6 +10,7 @@ static  uint16_t    at_rx_dma_pos = 0;
 static  osSemaphoreId_t    at_resp_sem;                 /* 等待响应的信号 */
 static osMutexId_t  at_mutex;                           /* 保护共享资源 */
 static  char        at_response[AT_RX_BUF_SIZE];        /* 最新响应内容 */
+static  volatile uint16_t at_response_len = 0;
 
 static void AT_RestartRx(UART_HandleTypeDef *huart)
 {
@@ -17,18 +18,74 @@ static void AT_RestartRx(UART_HandleTypeDef *huart)
     __HAL_DMA_DISABLE_IT(huart->hdmarx, DMA_IT_HT);
 }
 
+static uint32_t AT_EnterCritical(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+static void AT_ExitCritical(uint32_t primask)
+{
+    if(primask == 0U)
+    {
+        __enable_irq();
+    }
+}
+
+static void AT_ClearResponse(void)
+{
+    uint32_t primask = AT_EnterCritical();
+    at_response_len = 0;
+    at_response[0] = '\0';
+    AT_ExitCritical(primask);
+}
+
 static void AT_AppendResponse(const uint8_t *data, uint16_t size)
 {
-    size_t used = strlen(at_response);
-    size_t free_len = sizeof(at_response) - used - 1;
+    uint16_t free_len;
 
+    if((data == NULL) || (size == 0U))
+    {
+        return;
+    }
+
+    if(at_response_len >= (sizeof(at_response) - 1U))
+    {
+        return;
+    }
+
+    free_len = (uint16_t)(sizeof(at_response) - at_response_len - 1U);
     if(size > free_len)
     {
         size = free_len;
     }
 
-    memcpy(at_response + used, data, size);
-    at_response[used + size] = '\0';
+    memcpy(&at_response[at_response_len], data, size);
+    at_response_len += size;
+    at_response[at_response_len] = '\0';
+}
+
+static void AT_CopyResponse(char *buffer, uint16_t buffer_size)
+{
+    uint16_t copy_len;
+    uint32_t primask;
+
+    if(buffer_size == 0U)
+    {
+        return;
+    }
+
+    primask = AT_EnterCritical();
+    copy_len = at_response_len;
+    if(copy_len >= buffer_size)
+    {
+        copy_len = buffer_size - 1U;
+    }
+
+    memcpy(buffer, at_response, copy_len);
+    buffer[copy_len] = '\0';
+    AT_ExitCritical(primask);
 }
 void AT_init(void)
 {
@@ -45,28 +102,31 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
     if(huart->Instance != USART1) return;
 
-    if(Size >= AT_RX_BUF_SIZE)
+    if(Size > AT_RX_BUF_SIZE)
     {
-        AT_LOG_WARN("Rx size at limit: %d", Size);
-        Size = AT_RX_BUF_SIZE - 1;
+        return;
     }
 
-    if(Size < at_rx_dma_pos)
+    if(Size == at_rx_dma_pos)
     {
-        at_rx_dma_pos = 0;
+        return;
     }
 
-    at_frame_len = Size - at_rx_dma_pos;
-    AT_LOG_DEBUG("RX_Callback: Size=%d fresh=%d", Size, at_frame_len);
-    AT_HexDump("RX New Data", &at_rx_dma_buf[at_rx_dma_pos], at_frame_len);
+    if(Size > at_rx_dma_pos)
+    {
+        at_frame_len = Size - at_rx_dma_pos;
+        AT_AppendResponse(&at_rx_dma_buf[at_rx_dma_pos], at_frame_len);
+    }
+    else
+    {
+        at_frame_len = AT_RX_BUF_SIZE - at_rx_dma_pos;
+        AT_AppendResponse(&at_rx_dma_buf[at_rx_dma_pos], at_frame_len);
+        AT_AppendResponse(at_rx_dma_buf, Size);
+    }
 
-    AT_AppendResponse(&at_rx_dma_buf[at_rx_dma_pos], at_frame_len);
     at_rx_dma_pos = Size;
 
-    AT_LOG_INFO("Response: %s", at_response);
-
     at_stats.rx_count++;
-    at_stats.dma_restart_count++;
 
     osSemaphoreRelease(at_resp_sem);
 }
@@ -82,7 +142,7 @@ HAL_StatusTypeDef AT_Send(const char *cmd, const char *expect, uint32_t timeout_
         return HAL_TIMEOUT;
     }
 
-    memset(at_response, 0, sizeof(at_response));
+    AT_ClearResponse();
     while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
 
     char full_cmd[512];
@@ -120,16 +180,19 @@ HAL_StatusTypeDef AT_Send(const char *cmd, const char *expect, uint32_t timeout_
             break;
         }
 
-        AT_LOG_DEBUG("Got response %s", at_response);
+        char response_snapshot[AT_RX_BUF_SIZE];
+        AT_CopyResponse(response_snapshot, sizeof(response_snapshot));
 
-        if(strstr(at_response, "ERROR"))
+        AT_LOG_DEBUG("Got response %s", response_snapshot);
+
+        if(strstr(response_snapshot, "ERROR"))
         {
             AT_LOG_WARN("Response mismatch");
             result = HAL_ERROR;
             break;
         }
 
-        if(strstr(at_response, expect))
+        if(strstr(response_snapshot, expect))
         {
             AT_LOG_INFO("Command success");
             at_stats.success_count++;
@@ -205,8 +268,7 @@ HAL_StatusTypeDef AT_GetLastResponse(char *buffer, uint16_t buffer_size)
         return HAL_TIMEOUT;
     }
 
-    strncpy(buffer, at_response, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    AT_CopyResponse(buffer, buffer_size);
 
     osMutexRelease(at_mutex);
     return HAL_OK;

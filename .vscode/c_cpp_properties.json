@@ -21,7 +21,9 @@
                 "${workspaceFolder}/Middlewares/Third_Party/mbedTLS/include/mbedtls",
                 "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32H7xx/Include",
                 "${workspaceFolder}/Drivers/CMSIS/Include",
-                "${workspaceFolder}/Middlewares/ST/ARM/DSP/Inc"
+                "${workspaceFolder}/Middlewares/ST/ARM/DSP/Inc",
+                "${workspaceFolder}/MBEDTLS/App",
+                "${workspaceFolder}/Middlewares/Third_Party/mbedTLS/include"
             ],
             "defines": [
                 "ARM_MATH_CM7",

@@ -20,7 +20,6 @@ static void EscapeEspAtMqttField(const char *src, char *dst, size_t dst_size)
         if (src[i] == ',' && j + 3 < dst_size)
         {
             dst[j++] = '\\';
-            dst[j++] = '\\';
             dst[j++] = ',';
         }
         else
