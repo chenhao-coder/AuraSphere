@@ -131,9 +131,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_SPI1_Init();
   MX_I2S2_Init();
-  // MX_RTC_Init();
-  // MX_CRC_Init();
-  // MX_IWDG1_Init();
+//   MX_RTC_Init();
+//   MX_CRC_Init();
+//   MX_IWDG1_Init();
   MX_USART3_UART_Init();
   /* Call PreOsInit function */
   MX_MBEDTLS_Init();

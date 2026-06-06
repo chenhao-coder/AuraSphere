@@ -93,7 +93,7 @@ const osThreadAttr_t SystemTask_attributes = {
 osThreadId_t OTATaskHandle;
 const osThreadAttr_t OTATask_attributes = {
   .name = "OTATask",
-  .stack_size = 2048 * 4,
+  .stack_size = 4096 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for FFT_queue */
@@ -155,13 +155,13 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of dataProcessTask */
-  // dataProcessTaskHandle = osThreadNew(StartdataProcessTask, NULL, &dataProcessTask_attributes);
+//   dataProcessTaskHandle = osThreadNew(StartdataProcessTask, NULL, &dataProcessTask_attributes);
 
   /* creation of UIProcessTask */
-  // UIProcessTaskHandle = osThreadNew(StartUIProcessTask, NULL, &UIProcessTask_attributes);
+//   UIProcessTaskHandle = osThreadNew(StartUIProcessTask, NULL, &UIProcessTask_attributes);
 
   /* creation of SystemTask */
-  // SystemTaskHandle = osThreadNew(StartSystemTask, NULL, &SystemTask_attributes);
+//   SystemTaskHandle = osThreadNew(StartSystemTask, NULL, &SystemTask_attributes);
 
   /* creation of OTATask */
   OTATaskHandle = osThreadNew(MQTT_Task, NULL, &OTATask_attributes);
