@@ -7,10 +7,13 @@
 static const char *ssid = "CU_bDHQ";
 static const char *pwd = "kba26t4u";
 
+#define FIRMWARE_VERSION "1.0.1"
+
 #define ALIYUN_HOST     PRODUCT_KEY ".iot-as-mqtt.cn-shanghai.aliyuncs.com"
 #define ALIYUN_PORT  1883
 
-static void EscapeEspAtMqttField(const char *src, char *dst, size_t dst_size)
+/* ESP8266 AT 命令字段转义: " -> \\",  , -> \\,,  \\ -> \\\\ */
+void EscapeEspAtMqttField(const char *src, char *dst, size_t dst_size)
 {
     size_t j = 0;
 
@@ -19,18 +22,37 @@ static void EscapeEspAtMqttField(const char *src, char *dst, size_t dst_size)
 
     for (size_t i = 0; src[i] != '\0' && j + 1 < dst_size; i++)
     {
-        if (src[i] == ',' && j + 3 < dst_size)
+        if ((src[i] == '\\' || src[i] == '"' || src[i] == ',') && j + 3 < dst_size)
         {
             dst[j++] = '\\';
-            dst[j++] = ',';
+            dst[j++] = src[i];
         }
-        else
+        else if (j + 1 < dst_size)
         {
             dst[j++] = src[i];
         }
     }
 
     dst[j] = '\0';
+}
+
+/* 还原 ESP8266 AT 转义 (原地操作, 输出 <= 输入) */
+void EscapeEspAtMqttFieldUnescape(char *str)
+{
+    char *src = str, *dst = str;
+    while (*src)
+    {
+        if (src[0] == '\\' && (src[1] == ',' || src[1] == '"' || src[1] == '\\'))
+        {
+            *dst++ = src[1];
+            src += 2;
+        }
+        else
+        {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
 }
 
 static int MonthToIndex(const char *month)
@@ -191,7 +213,7 @@ static HAL_StatusTypeDef MQTT_GetTimestamp(char *timestamp, size_t timestamp_siz
     return HAL_TIMEOUT;
 }
 
-osMessageQueueId_t ota_notify_queue;        /* ���� OTA JSON �� OTA ���� */
+osMessageQueueId_t ota_notify_queue;       
 const osMessageQueueAttr_t ota_queue_attributes = {
   .name = "ota_notify_queue"
 };
@@ -202,7 +224,6 @@ void MQTT_Task(void *arg)
     osDelay(1000);
     ota_notify_queue = osMessageQueueNew(2, 512, &ota_queue_attributes);
 
-    /* Step1: ���� Wi-Fi */
     while(AT_ConnectWiFi(ssid, pwd) != HAL_OK)
     {
         printf("[MQTT] WiFi connecting...\r\n");
@@ -211,7 +232,6 @@ void MQTT_Task(void *arg)
     printf("[MQTT] WiFi OK\r\n");
     osDelay(1000);
 
-    /* Step2: ��ȡ SNTP ʱ�䲢���� MQTT ���� */
     char timestamp[16];
     while(MQTT_GetTimestamp(timestamp, sizeof(timestamp)) != HAL_OK)
     {
@@ -235,7 +255,6 @@ void MQTT_Task(void *arg)
         osDelay(1000);
     }
 
-    /* Step3: ���� Broker */
     snprintf(cmd, sizeof(cmd), "AT+MQTTCONN=0,\"%s\",%d,1", ALIYUN_HOST, ALIYUN_PORT);
     while (AT_Send(cmd, "+MQTTCONNECTED", 10000) != HAL_OK)
     {
@@ -244,16 +263,38 @@ void MQTT_Task(void *arg)
     }
     printf("[MQTT] Connected!\r\n");
 
-    /* Step4: ���� OTA Topic */
+    /* 等待 MQTT keepalive 就绪后再订阅 */
+    osDelay(500);
+
+    /* Step4: 订阅 OTA 升级 Topic */
     snprintf(cmd, sizeof(cmd),
         "AT+MQTTSUB=0,\"%s\",1", OTA_TOPIC_UP);
-    AT_Send(cmd, "OK", 5000);
+    if(AT_Send(cmd, "OK", 5000) == HAL_OK)
+        printf("[MQTT] Subscribed to OTA topic OK\r\n");
+    else
+        printf("[MQTT] Subscribe FAILED!\r\n");
+    osDelay(200);
 
-    /* Step5: ѭ��������Ϣ */
+    /* Step5: 上报固件版本 (阿里云 IoT 要求先上报版本才会下发 OTA) */
+    {
+        char payload[128], escaped_payload[256];
+        snprintf(payload, sizeof(payload),
+            "{\"id\":\"%lu\",\"params\":{\"version\":\"%s\",\"module\":\"MCU\"}}",
+            (uint32_t)osKernelGetTickCount(), FIRMWARE_VERSION);
+        EscapeEspAtMqttField(payload, escaped_payload, sizeof(escaped_payload));
+        snprintf(cmd, sizeof(cmd),
+            "AT+MQTTPUB=0,\"%s\",\"%s\",1,0",
+            OTA_TOPIC_IN, escaped_payload);
+        if(AT_Send(cmd, "OK", 5000) == HAL_OK)
+            printf("[MQTT] Firmware version reported: %s\r\n", FIRMWARE_VERSION);
+        else
+            printf("[MQTT] Version report FAILED!\r\n");
+    }
+
+    /* Step6: 循环处理消息 */
     char response[AT_RX_BUF_SIZE];
     for(;;)
     {
-        /* ��� at_response �Ƿ� MQTTSUBRECV */
         if(AT_GetLastResponse(response, sizeof(response)) == HAL_OK)
         {
             if(strstr(response, "+MQTTSUBRECV"))
@@ -263,6 +304,7 @@ void MQTT_Task(void *arg)
                 {
                     char buf[512];
                     strncpy(buf, json, 511);
+                    buf[511] = '\0';
                     osMessageQueuePut(ota_notify_queue, buf, 0, 0);
                 }
             }

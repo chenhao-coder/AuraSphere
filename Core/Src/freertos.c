@@ -38,6 +38,7 @@
 #include "ui_task.h"
 #include "at_driver_test.h"
 #include "mqtt_task.h"
+#include "ota_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -168,6 +169,12 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
+    const osThreadAttr_t ota_task_attributes = {
+      .name = "otaTask",
+      .stack_size = 4096 * 4,
+      .priority = (osPriority_t) osPriorityNormal,
+    };
+    osThreadNew(OTA_Task, NULL, &ota_task_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* Create the event(s) */

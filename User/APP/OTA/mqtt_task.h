@@ -15,6 +15,10 @@ extern osMessageQueueId_t ota_notify_queue;
 
 void MQTT_Task(void *arg);
 
+/* ESP8266 AT 命令字段逗号转义: ',' -> '\\,' */
+void EscapeEspAtMqttField(const char *src, char *dst, size_t dst_size);
+/* 还原 ESP8266 AT 响应中的 '\\,' -> ',' */
+void EscapeEspAtMqttFieldUnescape(char *str);
 
 #ifdef __cplusplus
 }

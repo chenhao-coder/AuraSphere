@@ -4,20 +4,21 @@
 #include "mqtt_task.h"
 #include "cmsis_os.h"
 
-/* ©¤©¤ MD5 ÉÏ±¨¸¨Öú£¨ÓÃ mbedTLS£©©¤©¤ */
+/* ï¿½ï¿½ï¿½ï¿½ MD5 ï¿½Ï±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ mbedTLSï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
 #include "md5.h"
 
 void OTA_ReportProgress(int step)
 {
-    char payload[256], cmd[512];
-    const char *desc = (step >= 0 && step < 100) ? "downloading" : 
+    char payload[256], escaped_payload[400], cmd[512];
+    const char *desc = (step >= 0 && step < 100) ? "downloading" :
                         (step == 100) ? "success" : "failed";
-    snprintf(payload, sizeof(payload), 
+    snprintf(payload, sizeof(payload),
             "{\"id\":\"%lu\",\"Params\":{\"step\":\"%d\",\"desc\":\"%s\"}}",
             (uint32_t)osKernelGetTickCount(), step, desc);
+    EscapeEspAtMqttField(payload, escaped_payload, sizeof(escaped_payload));
     snprintf(cmd, sizeof(cmd),
             "AT+MQTTPUB=0,\"%s\",\"%s\",1,0",
-            OTA_TOPIC_IN, payload);
+            OTA_TOPIC_IN, escaped_payload);
     AT_Send(cmd, "OK", 3000);
 }
 
@@ -26,13 +27,11 @@ void OTA_Task(void *arg)
     char json_buf[512];
     for(;;)
     {
-        /* µÈ´ı MQTT ÈÎÎñÍÆÀ´µÄ OTA Í¨Öª */
         if(osMessageQueueGet(ota_notify_queue, json_buf, 0, portMAX_DELAY) != osOK)
         {
             continue;
         } 
 
-        /* ½âÎö JSON */
         cJSON *root = cJSON_Parse(json_buf);
         if(!root) continue;
         cJSON *data     = cJSON_GetObjectItem(root, "data");
@@ -45,8 +44,6 @@ void OTA_Task(void *arg)
         printf("[OTA] New firmware: %s size=%lu\r\n", version, size);
         OTA_ReportProgress(0);   
 
-        /* ©¤©¤ ·Ö¿éÏÂÔØ ©¤©¤ */
-        /* µÚÒ»°ü£ºÏÈÕûÆ¬²Á³ı Bank2 */
         FLASH_EraseInitTypeDef erase = {
             .TypeErase  = FLASH_TYPEERASE_MASSERASE,
             .Banks      = FLASH_BANK_2
@@ -61,18 +58,18 @@ void OTA_Task(void *arg)
         mbedtls_md5_starts(&md5_ctx);
 
         uint8_t  chunk[4096];
-        uint32_t offset = 0, recv_len = 0;
+        uint32_t offset = 0, recv_len;
         int      ok_flag = 1;
 
         while (offset < size)
         {
+            recv_len = sizeof(chunk);
             if (AT_HttpGetChunk(url, offset,
                                 chunk, &recv_len) != HAL_OK)
             {
                 printf("[OTA] Download error at %lu\r\n", offset);
                 ok_flag = 0; break;
             }
-            /* Ğ´Èë±¸ÓÃ·ÖÇø£¬32 ×Ö½Ú¶ÔÆë */
             uint32_t write_size = (recv_len + 31) & ~31U;
             HAL_FLASH_Unlock();
             for (uint32_t i = 0; i < write_size; i += 32) 
@@ -100,7 +97,6 @@ void OTA_Task(void *arg)
             continue;
         }
 
-        /* ©¤©¤ MD5 Ğ£Ñé ©¤©¤ */
         uint8_t md5_bin[16]; char md5_str[33];
         mbedtls_md5_finish(&md5_ctx, md5_bin);
         mbedtls_md5_free(&md5_ctx);
@@ -117,7 +113,6 @@ void OTA_Task(void *arg)
         }
         printf("[OTA] MD5 OK! Rebooting...\r\n");
 
-        /* ©¤©¤ Ğ´Éı¼¶±êÖ¾£¬ÖØÆô ©¤©¤ */
         OTA_Flag_t flag = {
             .magic         = OTA_MAGIC_WORD,
             .upgrade_flag  = 1,

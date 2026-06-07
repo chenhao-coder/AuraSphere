@@ -17,6 +17,8 @@ HAL_StatusTypeDef AT_ConnectWiFi(const char *ssid, const char *pwd);
 HAL_StatusTypeDef AT_ConnectWiFi_Retry(const char *ssid, const char *pwd, uint8_t max_retries);
 HAL_StatusTypeDef AT_GetLastResponse(char *buffer, uint16_t buffer_size);
 HAL_StatusTypeDef AT_SendQuery(const char *cmd, uint32_t timeout_ms);
+HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
+                                   uint8_t *chunk, uint32_t *chunk_len);
 
 #ifdef __cplusplus
 }
