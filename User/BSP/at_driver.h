@@ -19,6 +19,12 @@ HAL_StatusTypeDef AT_GetLastResponse(char *buffer, uint16_t buffer_size);
 HAL_StatusTypeDef AT_SendQuery(const char *cmd, uint32_t timeout_ms);
 HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
                                    uint8_t *chunk, uint32_t *chunk_len);
+void AT_ClearRxBuffer(void);
+
+/* 流式 HTTP 下载: 单连接获取整个文件, 避免 auth_key 重复使用失效 */
+HAL_StatusTypeDef AT_HttpOpen(const char *url, uint32_t *total_size);
+HAL_StatusTypeDef AT_HttpRead(uint8_t *buf, uint32_t *len);
+void AT_HttpClose(void);
 
 #ifdef __cplusplus
 }

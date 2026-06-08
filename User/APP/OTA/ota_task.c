@@ -4,21 +4,30 @@
 #include "mqtt_task.h"
 #include "cmsis_os.h"
 
-/* ���� MD5 �ϱ��������� mbedTLS������ */
 #include "md5.h"
 
 void OTA_ReportProgress(int step)
 {
     char payload[256], escaped_payload[400], cmd[512];
-    const char *desc = (step >= 0 && step < 100) ? "downloading" :
-                        (step == 100) ? "success" : "failed";
+    const char *desc;
+
+    /* step 含义遵循阿里云 OTA 协议:
+       -1:升级失败, -2:下载失败, -3:校验失败, -4:烧写失败, 0-100:进度百分比 */
+    switch (step) {
+        case 100: desc = "upgrade success"; break;
+        case -1:  desc = "upgrade failed";  break;
+        case -2:  desc = "download failed"; break;
+        case -3:  desc = "verify failed";   break;
+        case -4:  desc = "flash failed";    break;
+        default:  desc = "downloading";     break;
+    }
     snprintf(payload, sizeof(payload),
-            "{\"id\":\"%lu\",\"Params\":{\"step\":\"%d\",\"desc\":\"%s\"}}",
+            "{\"id\":\"%lu\",\"params\":{\"step\":\"%d\",\"desc\":\"%s\",\"module\":\"MCU\"}}",
             (uint32_t)osKernelGetTickCount(), step, desc);
     EscapeEspAtMqttField(payload, escaped_payload, sizeof(escaped_payload));
     snprintf(cmd, sizeof(cmd),
             "AT+MQTTPUB=0,\"%s\",\"%s\",1,0",
-            OTA_TOPIC_IN, escaped_payload);
+            OTA_TOPIC_PROGRESS, escaped_payload);
     AT_Send(cmd, "OK", 3000);
 }
 
@@ -34,13 +43,33 @@ void OTA_Task(void *arg)
 
         cJSON *root = cJSON_Parse(json_buf);
         if(!root) continue;
-        cJSON *data     = cJSON_GetObjectItem(root, "data");
-        char *url       = cJSON_GetObjectItem(data, "url")->valuestring;
-        char *md5_exp   = cJSON_GetObjectItem(data, "md5")->valuestring;
-        uint32_t size   = cJSON_GetObjectItem(data, "size")->valueint;
-        char version[32];
-        strncpy(version, cJSON_GetObjectItem(data, "version")->valuestring, 31);
-        cJSON_Delete(root);
+
+        /* 字段 NULL 检查 */
+        cJSON *data = cJSON_GetObjectItem(root, "data");
+        if(!data) { cJSON_Delete(root); continue; }
+
+        cJSON *url_item  = cJSON_GetObjectItem(data, "url");
+        cJSON *md5_item  = cJSON_GetObjectItem(data, "md5");
+        cJSON *size_item = cJSON_GetObjectItem(data, "size");
+        cJSON *ver_item  = cJSON_GetObjectItem(data, "version");
+        if(!url_item || !md5_item || !size_item || !ver_item) {
+            printf("[OTA] Missing required fields\r\n");
+            cJSON_Delete(root);
+            continue;
+        }
+
+        /* 先拷贝字符串再释放 cJSON 树, 避免野指针 */
+        char url[256], md5_exp[33], version[32];
+        strncpy(url,     url_item->valuestring, sizeof(url) - 1);
+        url[sizeof(url) - 1] = '\0';
+        strncpy(md5_exp, md5_item->valuestring, sizeof(md5_exp) - 1);
+        md5_exp[sizeof(md5_exp) - 1] = '\0';
+        strncpy(version, ver_item->valuestring, sizeof(version) - 1);
+        version[sizeof(version) - 1] = '\0';
+        uint32_t size = (uint32_t)size_item->valueint;
+
+        cJSON_Delete(root);  /* 安全释放, url/md5_exp 已是独立副本 */
+
         printf("[OTA] New firmware: %s size=%lu\r\n", version, size);
         OTA_ReportProgress(0);   
 
@@ -53,6 +82,16 @@ void OTA_Task(void *arg)
         HAL_FLASHEx_Erase(&erase, &err);
         HAL_FLASH_Lock();
 
+        /* 单连接流式下载: 避免 auth_key 因多次建连失效 */
+        uint32_t total_size = 0;
+        if (AT_HttpOpen(url, &total_size) != HAL_OK)
+        {
+            printf("[OTA] HTTP open failed\r\n");
+            OTA_ReportProgress(-1);
+            continue;
+        }
+        printf("[OTA] Connected, file size=%lu\r\n", total_size);
+
         mbedtls_md5_context md5_ctx;
         mbedtls_md5_init(&md5_ctx);
         mbedtls_md5_starts(&md5_ctx);
@@ -64,15 +103,15 @@ void OTA_Task(void *arg)
         while (offset < size)
         {
             recv_len = sizeof(chunk);
-            if (AT_HttpGetChunk(url, offset,
-                                chunk, &recv_len) != HAL_OK)
+            HAL_StatusTypeDef r = AT_HttpRead(chunk, &recv_len);
+            if (r != HAL_OK || recv_len == 0)
             {
-                printf("[OTA] Download error at %lu\r\n", offset);
+                printf("[OTA] Download error at %lu (len=%lu)\r\n", offset, recv_len);
                 ok_flag = 0; break;
             }
             uint32_t write_size = (recv_len + 31) & ~31U;
             HAL_FLASH_Unlock();
-            for (uint32_t i = 0; i < write_size; i += 32) 
+            for (uint32_t i = 0; i < write_size; i += 32)
             {
                 uint8_t wbuf[32] = {0xFF};
                 memcpy(wbuf, chunk + i,
@@ -91,9 +130,11 @@ void OTA_Task(void *arg)
             printf("[OTA] %u%%\r\n", prog);
         }
 
-        if (!ok_flag) 
+        AT_HttpClose();
+
+        if (!ok_flag)
         {
-            OTA_ReportProgress(-1);
+            OTA_ReportProgress(-2);   /* -2: 下载失败 */
             continue;
         }
 
@@ -108,7 +149,7 @@ void OTA_Task(void *arg)
         {
             printf("[OTA] MD5 FAIL! got=%s exp=%s\r\n",
                    md5_str, md5_exp);
-            OTA_ReportProgress(-2);
+            OTA_ReportProgress(-3);   /* -3: 校验失败 */
             continue;
         }
         printf("[OTA] MD5 OK! Rebooting...\r\n");

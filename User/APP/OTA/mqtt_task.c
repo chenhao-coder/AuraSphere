@@ -297,15 +297,19 @@ void MQTT_Task(void *arg)
     {
         if(AT_GetLastResponse(response, sizeof(response)) == HAL_OK)
         {
-            if(strstr(response, "+MQTTSUBRECV"))
+            char *subrecv = strstr(response, "+MQTTSUBRECV");
+            if(subrecv)
             {
-                char *json = strchr(response, '{');
+                /* 从 +MQTTSUBRECV 之后找 '{', 避免匹配到回显中的 payload */
+                char *json = strchr(subrecv, '{');
                 if(json)
                 {
                     char buf[512];
                     strncpy(buf, json, 511);
                     buf[511] = '\0';
+                    printf("[MQTT] OTA notify: %s\r\n", buf);
                     osMessageQueuePut(ota_notify_queue, buf, 0, 0);
+                    AT_ClearRxBuffer(); /* 防止同一消息重复入列 */
                 }
             }
         }

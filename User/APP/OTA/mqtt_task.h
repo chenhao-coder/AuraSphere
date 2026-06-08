@@ -8,8 +8,9 @@ extern "C" {
 #include "cmsis_os.h"
 #include "aliyun_auth.h"
 
-#define OTA_TOPIC_UP  "/ota/device/upgrade/" PRODUCT_KEY "/" DEVICE_NAME
-#define OTA_TOPIC_IN  "/ota/device/inform/"  PRODUCT_KEY "/" DEVICE_NAME
+#define OTA_TOPIC_UP       "/ota/device/upgrade/"  PRODUCT_KEY "/" DEVICE_NAME
+#define OTA_TOPIC_IN       "/ota/device/inform/"   PRODUCT_KEY "/" DEVICE_NAME
+#define OTA_TOPIC_PROGRESS "/ota/device/progress/" PRODUCT_KEY "/" DEVICE_NAME
 
 extern osMessageQueueId_t ota_notify_queue;  
 

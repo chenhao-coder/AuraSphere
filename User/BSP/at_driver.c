@@ -280,6 +280,14 @@ HAL_StatusTypeDef AT_SendQuery(const char *cmd, uint32_t timeout_ms)
     return AT_Send(cmd, "OK", timeout_ms);
 }
 
+/* 清空 AT 接收缓冲区 (用于处理 unsolicited 消息后防止重复) */
+void AT_ClearRxBuffer(void)
+{
+    if(osMutexAcquire(at_mutex, 1000) != osOK) return;
+    AT_ClearResponse();
+    osMutexRelease(at_mutex);
+}
+
 /* ---- HTTP 分块下载 (内部使用) ---- */
 
 /* 发送 AT 命令并等待应答 - 调用者必须持有 at_mutex */
@@ -537,6 +545,310 @@ exit:
     osMutexRelease(at_mutex);
     *chunk_len = total_received;
     return ret;
+}
+
+/* ============ 流式 HTTP 下载 (单连接, 避免 auth_key 重复使用失效) ============ */
+
+static int      g_http_open = 0;        /* 是否有打开的流 */
+static uint8_t  g_http_buf[2048];       /* 头部解析后剩余的 body 数据 */
+static uint32_t g_http_buf_len = 0;
+static uint32_t g_http_total = 0;        /* Content-Length */
+static uint32_t g_http_received = 0;
+
+HAL_StatusTypeDef AT_HttpOpen(const char *url, uint32_t *total_size)
+{
+    char  host[128], path[512];
+    uint16_t port = 80;
+    char cmd[256];
+    HAL_StatusTypeDef s;
+
+    if(!url || !total_size) return HAL_ERROR;
+    if(g_http_open) return HAL_ERROR;    /* 不允许嵌套 */
+
+    /* ---- 1. 解析 URL ---- */
+    const char *p = url;
+    if(strncmp(p, "https://", 8) == 0)      { p += 8; port = 443; }
+    else if(strncmp(p, "http://", 7) == 0)  { p += 7; }
+
+    const char *slash = strchr(p, '/');
+    const char *colon = strchr(p, ':');
+    if(colon && (!slash || colon < slash)) {
+        size_t hlen = (size_t)(colon - p);
+        if(hlen >= sizeof(host)) hlen = sizeof(host) - 1;
+        memcpy(host, p, hlen); host[hlen] = '\0';
+        port = (uint16_t)atoi(colon + 1);
+    } else if(slash) {
+        size_t hlen = (size_t)(slash - p);
+        if(hlen >= sizeof(host)) hlen = sizeof(host) - 1;
+        memcpy(host, p, hlen); host[hlen] = '\0';
+    } else {
+        strncpy(host, p, sizeof(host) - 1);
+        host[sizeof(host) - 1] = '\0';
+    }
+    if(slash) strncpy(path, slash, sizeof(path) - 1);
+    else      { path[0] = '/'; path[1] = '\0'; }
+    path[sizeof(path) - 1] = '\0';
+
+    /* ---- 2. 获取互斥锁 (一直持有直到 AT_HttpClose) ---- */
+    if(osMutexAcquire(at_mutex, 60000) != osOK) return HAL_TIMEOUT;
+
+    /* ---- 3. 启用多连接模式 ---- */
+    if(AT_SendLocked("AT+CIPMUX=1", "OK", 2000) != HAL_OK) goto exit;
+    AT_ClearResponse();
+    while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+
+    /* ---- 4. 建立 TCP/SSL 连接 ---- */
+    {
+        const char *proto = (port == 443) ? "SSL" : "TCP";
+        if(port == 443) {
+            AT_SendLocked("AT+CIPSSLSIZE=4096", "OK", 2000);
+            AT_ClearResponse();
+            while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+        }
+        int n = snprintf(cmd, sizeof(cmd), "AT+CIPSTART=1,\"%s\",\"%s\",%u", proto, host, port);
+        if(n >= (int)sizeof(cmd)) goto exit_clip;
+        s = AT_SendLocked(cmd, "OK", 15000);
+        if(s != HAL_OK) {
+            AT_ClearResponse();
+            while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+            s = AT_SendLocked(cmd, "ALREADY CONNECTED", 5000);
+        }
+        if(s != HAL_OK) {
+            if(port == 443) {
+                port = 80; proto = "TCP";
+                n = snprintf(cmd, sizeof(cmd), "AT+CIPSTART=1,\"%s\",\"%s\",%u", proto, host, port);
+                if(n < (int)sizeof(cmd)) {
+                    AT_ClearResponse();
+                    while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+                    s = AT_SendLocked(cmd, "OK", 15000);
+                }
+            }
+        }
+        if(s != HAL_OK) goto exit_clip;
+    }
+
+    /* ---- 5. 构造 HTTP GET 请求 (无 Range, 请求完整文件) ---- */
+    {
+        char http_req[1024];
+        int req_len = snprintf(http_req, sizeof(http_req),
+            "GET %s HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            path, host);
+
+        if(req_len < 0 || req_len >= (int)sizeof(http_req)) goto exit_clip;
+
+        {
+            char cipsend[64];
+            snprintf(cipsend, sizeof(cipsend), "AT+CIPSEND=1,%d", req_len);
+            if(AT_SendLocked(cipsend, ">", 5000) != HAL_OK) goto exit_clip;
+            osDelay(10);
+            if(HAL_UART_Transmit(&huart1, (uint8_t *)http_req, req_len, 5000) != HAL_OK)
+                goto exit_clip;
+
+            /* 等待 SEND OK */
+            {
+                char snap[AT_RX_BUF_SIZE];
+                uint32_t t0 = osKernelGetTickCount();
+                int ok = 0;
+                AT_ClearResponse();
+                while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+                while((osKernelGetTickCount() - t0) < 10000) {
+                    if(osSemaphoreAcquire(at_resp_sem, 1000) == osOK) {
+                        AT_CopyResponse(snap, sizeof(snap));
+                        if(strstr(snap, "SEND OK")) { ok = 1; break; }
+                        if(strstr(snap, "ERROR"))   break;
+                    }
+                }
+                if(!ok) goto exit_clip;
+            }
+        }
+    }
+
+    /* ---- 6. 接收 HTTP 响应头, 提取 Content-Length, 缓存剩余 body ---- */
+    {
+        int headers_done = 0;
+        uint32_t recv_deadline = osKernelGetTickCount() + 15000;
+
+        g_http_buf_len = 0;
+        g_http_total = 0;
+        g_http_received = 0;
+
+        AT_ClearResponse();
+        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+
+        while(!headers_done && (osKernelGetTickCount() < recv_deadline))
+        {
+            if(osSemaphoreAcquire(at_resp_sem, 3000) != osOK) break;
+
+            char snapshot[AT_RX_BUF_SIZE];
+            uint32_t primask = AT_EnterCritical();
+            uint16_t snap_len = at_response_len;
+            if(snap_len >= sizeof(snapshot)) snap_len = sizeof(snapshot) - 1;
+            memcpy(snapshot, at_response, snap_len);
+            snapshot[snap_len] = '\0';
+            at_response_len = 0;
+            at_response[0] = '\0';
+            AT_ExitCritical(primask);
+
+            if(strstr(snapshot, "CLOSED") || strstr(snapshot, "ERROR"))
+                goto exit_clip;
+
+            char *header_end = strstr(snapshot, "\r\n\r\n");
+            if(header_end)
+            {
+                headers_done = 1;
+                char *cl = strstr(snapshot, "Content-Length:");
+                if(cl) {
+                    g_http_total = (uint32_t)atoi(cl + 15);
+                }
+                /* 保存头部之后、\r\n\r\n 之后的 body 数据 */
+                uint8_t *body_start = (uint8_t *)header_end + 4;
+                uint32_t body_avail = (uint32_t)((uint8_t *)snapshot + snap_len - body_start);
+                if(body_avail > 0 && body_avail <= sizeof(g_http_buf)) {
+                    memcpy(g_http_buf, body_start, body_avail);
+                    g_http_buf_len = body_avail;
+                    g_http_received = body_avail;
+                }
+            }
+        }
+        if(!headers_done) goto exit_clip;
+    }
+
+    g_http_open = 1;
+    *total_size = g_http_total;
+    return HAL_OK;
+
+exit_clip:
+    AT_SendLocked("AT+CIPCLOSE=1", "OK", 3000);
+    AT_ClearResponse();
+    while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+exit:
+    osMutexRelease(at_mutex);
+    g_http_open = 0;
+    return HAL_ERROR;
+}
+
+HAL_StatusTypeDef AT_HttpRead(uint8_t *buf, uint32_t *len)
+{
+    uint32_t copy;
+
+    if(!g_http_open || !buf || !len || *len == 0) return HAL_ERROR;
+
+    /* 优先返回缓存的数据 (头部解析时剩余的 body) */
+    if(g_http_buf_len > 0)
+    {
+        copy = (*len < g_http_buf_len) ? *len : g_http_buf_len;
+        memcpy(buf, g_http_buf, copy);
+        if(g_http_buf_len > copy)
+            memmove(g_http_buf, g_http_buf + copy, g_http_buf_len - copy);
+        g_http_buf_len -= copy;
+        *len = copy;
+        return HAL_OK;
+    }
+
+    /* 等待下一个 +IPD 片段 */
+    if(osSemaphoreAcquire(at_resp_sem, 10000) != osOK)
+    {
+        *len = 0;
+        return HAL_ERROR;
+    }
+
+    char snapshot[AT_RX_BUF_SIZE];
+    uint32_t primask = AT_EnterCritical();
+    uint16_t snap_len = at_response_len;
+    if(snap_len >= sizeof(snapshot)) snap_len = sizeof(snapshot) - 1;
+    memcpy(snapshot, at_response, snap_len);
+    snapshot[snap_len] = '\0';
+    at_response_len = 0;
+    at_response[0] = '\0';
+    AT_ExitCritical(primask);
+
+    /* 检查 CLOSED */
+    if(strstr(snapshot, "CLOSED") || strstr(snapshot, "CLOSE"))
+    {
+        g_http_open = 0;   /* 服务器关闭连接, 不再可读 */
+        if(g_http_total > 0 && g_http_received >= g_http_total)
+        {
+            *len = 0;
+            return HAL_OK;  /* 正常结束 */
+        }
+        *len = 0;
+        return HAL_ERROR;
+    }
+
+    if(strstr(snapshot, "ERROR"))
+    {
+        *len = 0;
+        return HAL_ERROR;
+    }
+
+    /* 提取 +IPD 数据部分 (去除 +IPD,<len>: 前缀) */
+    char *ipd = strstr(snapshot, "+IPD,");
+    if(ipd)
+    {
+        char *data_start = strchr(ipd + 5, ':');
+        if(data_start) data_start++;
+        else data_start = ipd;
+
+        uint32_t avail = (uint32_t)((uint8_t *)snapshot + snap_len - (uint8_t *)data_start);
+        copy = (*len < avail) ? *len : avail;
+        if(copy > 0)
+        {
+            memcpy(buf, data_start, copy);
+            g_http_received += copy;
+
+            /* 多余数据存入缓存 */
+            if(avail > copy)
+            {
+                g_http_buf_len = avail - copy;
+                if(g_http_buf_len <= sizeof(g_http_buf))
+                    memcpy(g_http_buf, data_start + copy, g_http_buf_len);
+                else
+                    g_http_buf_len = 0;
+            }
+            *len = copy;
+            return HAL_OK;
+        }
+    }
+    else
+    {
+        /* 没有 +IPD 前缀, 整个 snapshot 就是数据 */
+        copy = (*len < snap_len) ? *len : snap_len;
+        if(copy > 0)
+        {
+            memcpy(buf, snapshot, copy);
+            g_http_received += copy;
+
+            if(snap_len > copy)
+            {
+                g_http_buf_len = snap_len - copy;
+                if(g_http_buf_len <= sizeof(g_http_buf))
+                    memcpy(g_http_buf, snapshot + copy, g_http_buf_len);
+                else
+                    g_http_buf_len = 0;
+            }
+            *len = copy;
+            return HAL_OK;
+        }
+    }
+
+    *len = 0;
+    return HAL_OK;
+}
+
+void AT_HttpClose(void)
+{
+    if(g_http_open)
+    {
+        AT_SendLocked("AT+CIPCLOSE=1", "OK", 3000);
+        AT_ClearResponse();
+        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+        g_http_open = 0;
+        g_http_buf_len = 0;
+    }
+    osMutexRelease(at_mutex);
 }
 
 
