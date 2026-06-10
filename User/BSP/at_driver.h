@@ -9,7 +9,7 @@ extern "C" {
 #include <string.h>
 #include "usart.h"
 
-#define AT_RX_BUF_SIZE      2048
+#define AT_RX_BUF_SIZE      4096   /* 需容纳 +IPD 片段, ESP8266 单包可达 2920+ 字节 */
 
 void AT_init(void);
 HAL_StatusTypeDef AT_Send(const char *cmd, const char *expect, uint32_t timeout_ms);

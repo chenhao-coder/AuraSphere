@@ -82,33 +82,35 @@ void OTA_Task(void *arg)
         HAL_FLASHEx_Erase(&erase, &err);
         HAL_FLASH_Lock();
 
-        /* 单连接流式下载: 避免 auth_key 因多次建连失效 */
-        uint32_t total_size = 0;
-        if (AT_HttpOpen(url, &total_size) != HAL_OK)
-        {
-            printf("[OTA] HTTP open failed\r\n");
-            OTA_ReportProgress(-1);
-            continue;
-        }
-        printf("[OTA] Connected, file size=%lu\r\n", total_size);
+        /* 分块 HTTP Range 下载: 每 4KB 请求一次, 短连接, 避免 ESP8266 长连接停摆 */
+        osDelay(2000); /* 等待 ESP8266 从 MQTT 状态恢复 */
 
         mbedtls_md5_context md5_ctx;
         mbedtls_md5_init(&md5_ctx);
         mbedtls_md5_starts(&md5_ctx);
 
-        uint8_t  chunk[4096];
+        uint8_t  chunk[2048];  /* 2KB per chunk: ESP8266 buffer friendly */
         uint32_t offset = 0, recv_len;
         int      ok_flag = 1;
+        int      retry   = 0;
 
         while (offset < size)
         {
             recv_len = sizeof(chunk);
-            HAL_StatusTypeDef r = AT_HttpRead(chunk, &recv_len);
+            HAL_StatusTypeDef r = AT_HttpGetChunk(url, offset, chunk, &recv_len);
             if (r != HAL_OK || recv_len == 0)
             {
+                if(retry < 3) {
+                    printf("[OTA] Chunk retry %d at %lu\r\n", retry + 1, offset);
+                    retry++;
+                    osDelay(1000);
+                    continue;
+                }
                 printf("[OTA] Download error at %lu (len=%lu)\r\n", offset, recv_len);
                 ok_flag = 0; break;
             }
+            retry = 0;  /* 成功后重置重试计数 */
+
             uint32_t write_size = (recv_len + 31) & ~31U;
             HAL_FLASH_Unlock();
             for (uint32_t i = 0; i < write_size; i += 32)
@@ -126,11 +128,8 @@ void OTA_Task(void *arg)
             offset += recv_len;
 
             uint8_t prog = (uint8_t)(offset * 100 / size);
-            OTA_ReportProgress(prog);
-            printf("[OTA] %u%%\r\n", prog);
+            printf("[OTA] %u%% (chunk %lu bytes)\r\n", prog, recv_len);
         }
-
-        AT_HttpClose();
 
         if (!ok_flag)
         {
