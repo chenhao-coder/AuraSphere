@@ -82,53 +82,43 @@ void OTA_Task(void *arg)
         HAL_FLASHEx_Erase(&erase, &err);
         HAL_FLASH_Lock();
 
-        /* 分块 HTTP Range 下载: 每 4KB 请求一次, 短连接, 避免 ESP8266 长连接停摆 */
-        osDelay(2000); /* 等待 ESP8266 从 MQTT 状态恢复 */
+        /* Range 分块: 1024 字节每块, 跟最后一包(正确)的尺寸相近 */
+        osDelay(2000);
 
         mbedtls_md5_context md5_ctx;
         mbedtls_md5_init(&md5_ctx);
         mbedtls_md5_starts(&md5_ctx);
 
-        uint8_t  chunk[2048];  /* 2KB per chunk: ESP8266 buffer friendly */
-        uint32_t offset = 0, recv_len;
-        int      ok_flag = 1;
-        int      retry   = 0;
+        #define CHUNK_SZ 1024
+        uint8_t  chunk[CHUNK_SZ];
+        uint32_t offset = 0, recv_len, md5_bytes = 0;
+        int      ok_flag = 1, retry = 0;
 
         while (offset < size)
         {
-            recv_len = sizeof(chunk);
+            uint32_t remaining = size - offset;
+            recv_len = (CHUNK_SZ < remaining) ? CHUNK_SZ : remaining;
             HAL_StatusTypeDef r = AT_HttpGetChunk(url, offset, chunk, &recv_len);
-            if (r != HAL_OK || recv_len == 0)
-            {
-                if(retry < 3) {
-                    printf("[OTA] Chunk retry %d at %lu\r\n", retry + 1, offset);
-                    retry++;
-                    osDelay(1000);
-                    continue;
-                }
-                printf("[OTA] Download error at %lu (len=%lu)\r\n", offset, recv_len);
-                ok_flag = 0; break;
+            if (r != HAL_OK || recv_len == 0) {
+                if(retry < 5) { retry++; osDelay(2000); continue; }
+                printf("[OTA] Err at %lu\r\n", offset); ok_flag = 0; break;
             }
-            retry = 0;  /* 成功后重置重试计数 */
+            retry = 0;
+            osDelay(3000); /* OSS auth_key 限速: 70+ 请求后会拒绝, 3s 间隔避免 */
 
-            uint32_t write_size = (recv_len + 31) & ~31U;
+            uint32_t ws = (recv_len + 31) & ~31U;
             HAL_FLASH_Unlock();
-            for (uint32_t i = 0; i < write_size; i += 32)
-            {
+            for (uint32_t i = 0; i < ws; i += 32) {
                 uint8_t wbuf[32] = {0xFF};
-                memcpy(wbuf, chunk + i,
-                       (i + 32 <= recv_len) ? 32 : recv_len - i);
-                HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD,
-                    OTA_BACKUP_ADDR + offset + i,
-                    (uint32_t)wbuf);
+                memcpy(wbuf, chunk + i, (i+32 <= recv_len) ? 32 : recv_len - i);
+                HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, OTA_BACKUP_ADDR + offset + i, (uint32_t)wbuf);
             }
             HAL_FLASH_Lock();
 
             mbedtls_md5_update(&md5_ctx, chunk, recv_len);
+            md5_bytes += recv_len;
             offset += recv_len;
-
-            uint8_t prog = (uint8_t)(offset * 100 / size);
-            printf("[OTA] %u%% (chunk %lu bytes)\r\n", prog, recv_len);
+            printf("[OTA] %u%% (%lu b)\r\n", (uint8_t)(offset*100/size), recv_len);
         }
 
         if (!ok_flag)
@@ -146,12 +136,12 @@ void OTA_Task(void *arg)
 
         if (strncasecmp(md5_str, md5_exp, 32) != 0) 
         {
-            printf("[OTA] MD5 FAIL! got=%s exp=%s\r\n",
-                   md5_str, md5_exp);
+            printf("[OTA] MD5 FAIL! got=%s exp=%s (hashed %lu bytes)\r\n",
+                   md5_str, md5_exp, md5_bytes);
             OTA_ReportProgress(-3);   /* -3: 校验失败 */
             continue;
         }
-        printf("[OTA] MD5 OK! Rebooting...\r\n");
+        printf("[OTA] MD5 OK! (hashed %lu bytes) Rebooting...\r\n", md5_bytes);
 
         OTA_Flag_t flag = {
             .magic         = OTA_MAGIC_WORD,

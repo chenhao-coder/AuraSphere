@@ -336,7 +336,7 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
     uint32_t total_received = 0;
     const uint32_t max_chunk = chunk_len ? *chunk_len : 0;
     HAL_StatusTypeDef ret = HAL_ERROR;
-    uint32_t content_length = 0; /* HTTP Content-Length, 跨代码块使用 */
+    uint32_t content_length = 0;
 
     if(!url || !chunk || !chunk_len || max_chunk == 0) return HAL_ERROR;
 
@@ -379,14 +379,16 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
     AT_ClearResponse();
     while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
 
-    /* ---- 4. 建立 TCP 连接 (跳过 SSL, 直接 HTTP:80) ---- */
+    /* ---- 4. 建立 TCP 连接 ---- */
     {
         char cmd[256];
         port = 80;  /* 强制 HTTP, ESP8266 不支持 SSL */
-
+        /* 关闭可能残留的 link=1 连接 */
+        AT_SendLocked("AT+CIPCLOSE=1", "OK", 1000);
+        AT_ClearResponse();
+        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
         int n = snprintf(cmd, sizeof(cmd), "AT+CIPSTART=1,\"TCP\",\"%s\",%u", host, port);
         if(n >= (int)sizeof(cmd)) goto exit;
-
         HAL_StatusTypeDef s = AT_SendLocked(cmd, "OK", 15000);
         if(s != HAL_OK) {
             AT_ClearResponse();
@@ -407,19 +409,15 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
             "Connection: close\r\n"
             "\r\n",
             path, host, (unsigned long)offset, (unsigned long)range_end);
-
         if(req_len < 0 || req_len >= (int)sizeof(http_req)) goto exit_clip;
+        printf("[HTTP] Request: Range bytes=%lu-%lu\r\n", (unsigned long)offset, (unsigned long)range_end);
 
         /* ---- 6. AT+CIPSEND ---- */
         {
             char cipsend[64];
             snprintf(cipsend, sizeof(cipsend), "AT+CIPSEND=1,%d", req_len);
             if(AT_SendLocked(cipsend, ">", 5000) != HAL_OK) goto exit_clip;
-
-            /* 短暂延时等待 '>' 稳定 */
             osDelay(10);
-
-            /* ---- 7. 发送 HTTP 数据 (不加 CRLF) ---- */
             if(HAL_UART_Transmit(&huart1, (uint8_t *)http_req, req_len, 5000) != HAL_OK)
                 goto exit_clip;
 
@@ -430,13 +428,11 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
                 int ok = 0;
                 AT_ClearResponse();
                 while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
-                while((osKernelGetTickCount() - t0) < 10000)
-                {
-                    if(osSemaphoreAcquire(at_resp_sem, 1000) == osOK)
-                    {
+                while((osKernelGetTickCount() - t0) < 10000) {
+                    if(osSemaphoreAcquire(at_resp_sem, 1000) == osOK) {
                         AT_CopyResponse(snap, sizeof(snap));
                         if(strstr(snap, "SEND OK")) { ok = 1; break; }
-                        if(strstr(snap, "ERROR"))   break;
+                        if(strstr(snap, "ERROR")) break;
                     }
                 }
                 if(!ok) goto exit_clip;
@@ -444,81 +440,82 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
         }
     }
 
-    /* ---- 8. 接收 HTTP 响应 ---- */
-    content_length = 0; /* 外层作用域, 供后续完整性检查使用 */
+    /* ---- 7. 接收 HTTP 响应 ---- */
+    content_length = 0;
     {
         int headers_done = 0;
-        uint8_t *body_start = NULL;
         uint32_t recv_deadline = osKernelGetTickCount() + 20000;
-        int connection_closed = 0;
 
-        /* 不清空 at_response! SEND OK 阶段可能已有 HTTP 响应数据 */
-        osDelay(100); /* 给 ESP8266 一点时间输出 HTTP 响应 */
-        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK); /* drain stale sem */
+        osDelay(100);
+        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
 
-        while(!connection_closed && (osKernelGetTickCount() < recv_deadline))
+        while((osKernelGetTickCount() < recv_deadline))
         {
-            /* 检查 at_response 是否已有数据 (不清空后再等) */
             uint32_t primask;
             uint16_t snap_len;
+
             primask = AT_EnterCritical();
             snap_len = at_response_len;
             AT_ExitCritical(primask);
 
             if(snap_len == 0) {
                 if(osSemaphoreAcquire(at_resp_sem, 3000) != osOK) break;
+                osDelay(50);
                 primask = AT_EnterCritical();
                 snap_len = at_response_len;
                 AT_ExitCritical(primask);
                 if(snap_len == 0) continue;
             }
 
-            /* 拷贝并清空 at_response */
+            /* 拷贝到静态 buffer 并清空 at_response */
             {
-                static char g_snap[4096]; /* static 省栈 */
-                uint16_t copy_len = snap_len;
-                if(copy_len > sizeof(g_snap) - 1) copy_len = sizeof(g_snap) - 1;
+                static char buf[4096];
+                uint16_t copy = snap_len;
+                if(copy > sizeof(buf) - 1) copy = sizeof(buf) - 1;
                 primask = AT_EnterCritical();
-                memcpy(g_snap, at_response, copy_len);
-                g_snap[copy_len] = '\0';
+                memcpy(buf, at_response, copy);
+                buf[copy] = '\0';
                 at_response_len = 0;
                 at_response[0] = '\0';
                 AT_ExitCritical(primask);
 
-                /* 检查 CLOSED */
-                if(strstr(g_snap, "CLOSE")) connection_closed = 1;
+                if(strstr(buf, "CLOSED") || strstr(buf, "ERROR"))
+                    break;
 
-                /* 第一次先分离 HTTP 头 */
-                if(!headers_done)
-                {
-                    char *header_end = strstr(g_snap, "\r\n\r\n");
-                    if(header_end)
-                    {
+                if(!headers_done) {
+                    /* 从 HTTP/ 位置搜 \r\n\r\n, 避免匹配 Recv/SEND OK 后的 */
+                    char *hm = strstr(buf, "HTTP/");
+                    char *he = hm ? strstr(hm, "\r\n\r\n") : NULL;
+                    if(he) {
                         headers_done = 1;
-                        char *cl = strstr(g_snap, "Content-Length:");
+                        char *cl = strstr(buf, "Content-Length:");
                         if(cl) content_length = (uint32_t)atoi(cl + 15);
-                        /* body 数据从 header_end+4 开始 */
-                        uint32_t body_len = (uint32_t)((uint8_t*)g_snap + copy_len - (uint8_t*)header_end - 4);
-                        uint32_t take = body_len;
+                        {
+                            char *cr = strstr(buf, "Content-Range:");
+                            if(cr) {
+                                char *eol = strstr(cr, "\r\n");
+                                printf("[HTTP] Response: %.*s\r\n", eol ? (int)(eol-cr) : 30, cr);
+                            }
+                        }
+                        printf("[HTTP] hdr_end@%d body0: %02X%02X%02X%02X%02X%02X%02X%02X\r\n",
+                               (int)(he-buf),
+                               (uint8_t)he[4],(uint8_t)he[5],(uint8_t)he[6],(uint8_t)he[7],
+                               (uint8_t)he[8],(uint8_t)he[9],(uint8_t)he[10],(uint8_t)he[11]);
+                        /* 提取 body */
+                        uint32_t blen = (uint32_t)((uint8_t*)buf + copy - (uint8_t*)he - 4);
+                        uint32_t take = blen;
                         if(total_received + take > max_chunk) take = max_chunk - total_received;
                         if(take > 0) {
-                            memcpy(chunk + total_received, header_end + 4, take);
+                            memcpy(chunk + total_received, he + 4, take);
                             total_received += take;
                         }
                     }
-                    else if(total_received == 0)
-                    {
-                        /* 还没收到头部, 继续等 */
-                        continue;
-                    }
-                }
-                else
-                {
-                    /* 头部已解析, 后续所有数据都是 body */
-                    uint32_t take = copy_len;
+                } else {
+                    /* 头部已解析, body 续传 */
+                    uint32_t take = copy;
                     if(total_received + take > max_chunk) take = max_chunk - total_received;
                     if(take > 0) {
-                        memcpy(chunk + total_received, g_snap, take);
+                        memcpy(chunk + total_received, buf, take);
                         total_received += take;
                     }
                 }
@@ -529,20 +526,16 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
         }
     }
 
-    /* 验证接收完整性: 必须等于 Content-Length (或至少达到 max_chunk) */
-    if(content_length > 0 && total_received < content_length) {
-        /* 收到的不完整! 可能是 ESP8266 提前截断 */
+    /* 完整性检查 */
+    if(content_length > 0 && total_received < content_length)
         ret = HAL_ERROR;
-    } else {
+    else
         ret = (total_received > 0) ? HAL_OK : HAL_ERROR;
-    }
 
 exit_clip:
-    /* ---- 9. 关闭 TCP 连接 ---- */
     AT_SendLocked("AT+CIPCLOSE=1", "OK", 3000);
     AT_ClearResponse();
     while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
-
 exit:
     osMutexRelease(at_mutex);
     *chunk_len = total_received;
