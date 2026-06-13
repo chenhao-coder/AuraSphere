@@ -4,8 +4,11 @@
 #include <stdint.h>
 #include <string.h>
 
-static const char *ssid = "CU_bDHQ";
-static const char *pwd = "kba26t4u";
+// static const char *ssid = "CU_bDHQ";
+// static const char *pwd = "kba26t4u";
+
+static const char *ssid = "21-502";
+static const char *pwd = "1111199999";
 
 #define FIRMWARE_VERSION "1.0.1"
 

@@ -328,11 +328,255 @@ static HAL_StatusTypeDef AT_SendLocked(const char *cmd, const char *expect, uint
     return result;
 }
 
+/* ============ 单连接 SSL 持久化下载 API ============ */
+static int       g_persistent = 0;     /* 持久连接是否打开 */
+static char     g_persist_host[128];   /* 持久连接 host */
+static char     g_persist_path[512];   /* 持久连接 path */
+static uint16_t g_persist_port = 443;
+
+/* 打开 SSL 持久连接, 获取文件总大小 */
+HAL_StatusTypeDef AT_HttpPersistOpen(const char *url, uint32_t *total_size)
+{
+    if(!url || !total_size || g_persistent) return HAL_ERROR;
+
+    /* 解析 URL */
+    const char *p = url;
+    g_persist_port = 443;
+    if(strncmp(p, "https://", 8) == 0)      { p += 8; g_persist_port = 443; }
+    else if(strncmp(p, "http://", 7) == 0)  { p += 7; g_persist_port = 80; }
+
+    const char *slash = strchr(p, '/');
+    const char *colon = strchr(p, ':');
+    if(colon && (!slash || colon < slash)) {
+        size_t hlen = (size_t)(colon - p);
+        if(hlen >= sizeof(g_persist_host)) hlen = sizeof(g_persist_host) - 1;
+        memcpy(g_persist_host, p, hlen); g_persist_host[hlen] = '\0';
+        g_persist_port = (uint16_t)atoi(colon + 1);
+    } else if(slash) {
+        size_t hlen = (size_t)(slash - p);
+        if(hlen >= sizeof(g_persist_host)) hlen = sizeof(g_persist_host) - 1;
+        memcpy(g_persist_host, p, hlen); g_persist_host[hlen] = '\0';
+    } else {
+        strncpy(g_persist_host, p, sizeof(g_persist_host) - 1);
+        g_persist_host[sizeof(g_persist_host) - 1] = '\0';
+    }
+    if(slash) strncpy(g_persist_path, slash, sizeof(g_persist_path) - 1);
+    else      { g_persist_path[0] = '/'; g_persist_path[1] = '\0'; }
+    g_persist_path[sizeof(g_persist_path) - 1] = '\0';
+
+    /* 获取互斥锁 (一直持有到 AT_HttpPersistClose) */
+    if(osMutexAcquire(at_mutex, 60000) != osOK) return HAL_TIMEOUT;
+
+    /* CIPMUX=1 */
+    if(AT_SendLocked("AT+CIPMUX=1", "OK", 2000) != HAL_OK) { osMutexRelease(at_mutex); return HAL_ERROR; }
+    AT_ClearResponse();
+    while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+
+    /* CIPSTART SSL:443 */
+    {
+        char cmd[256];
+        const char *proto = (g_persist_port == 443) ? "SSL" : "TCP";
+        int n = snprintf(cmd, sizeof(cmd), "AT+CIPSTART=1,\"%s\",\"%s\",%u", proto, g_persist_host, g_persist_port);
+        if(n >= (int)sizeof(cmd)) { osMutexRelease(at_mutex); return HAL_ERROR; }
+        HAL_StatusTypeDef s = AT_SendLocked(cmd, "OK", 15000);
+        if(s != HAL_OK) {
+            AT_ClearResponse();
+            while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+            s = AT_SendLocked(cmd, "ALREADY CONNECTED", 5000);
+        }
+        if(s != HAL_OK) {
+            osMutexRelease(at_mutex);
+            return HAL_ERROR;
+        }
+    }
+
+    /* total_size 从 OTA 通知已知, 不在此处探测 — 避免干扰后续数据流 */
+    *total_size = 0;
+
+    g_persistent = 1;
+    printf("[HTTP] Persist connected to %s:%u\r\n", g_persist_host, g_persist_port);
+    return HAL_OK;
+}
+
+/* 在持久连接上发送 Range 请求并获取 chunk 数据 */
+HAL_StatusTypeDef AT_HttpPersistGetChunk(uint32_t offset, uint8_t *chunk, uint32_t *chunk_len)
+{
+    uint32_t total_received = 0;
+    const uint32_t max_chunk = chunk_len ? *chunk_len : 0;
+    uint32_t content_length = 0;
+    int      headers_done = 0;
+    uint32_t deadline;
+
+    if(!g_persistent || !chunk || !chunk_len || max_chunk == 0) return HAL_ERROR;
+
+    /* 构造并发送 HTTP Range 请求 */
+    {
+        char http_req[1024];
+        uint32_t range_end = offset + max_chunk - 1;
+        int req_len = snprintf(http_req, sizeof(http_req),
+            "GET %s HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Range: bytes=%lu-%lu\r\n"
+            "Connection: keep-alive\r\n"
+            "\r\n",
+            g_persist_path, g_persist_host, (unsigned long)offset, (unsigned long)range_end);
+        if(req_len < 0 || req_len >= (int)sizeof(http_req)) return HAL_ERROR;
+
+        /* CIPSEND */
+        {
+            char cipsend[64];
+            snprintf(cipsend, sizeof(cipsend), "AT+CIPSEND=1,%d", req_len);
+            if(AT_SendLocked(cipsend, ">", 5000) != HAL_OK) return HAL_ERROR;
+            osDelay(10);
+            if(HAL_UART_Transmit(&huart1, (uint8_t *)http_req, req_len, 5000) != HAL_OK) return HAL_ERROR;
+        }
+
+        /* 等待 SEND OK */
+        {
+            char snap[AT_RX_BUF_SIZE];
+            uint32_t t0 = osKernelGetTickCount(); int ok = 0;
+            AT_ClearResponse();
+            while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+            while((osKernelGetTickCount() - t0) < 10000) {
+                if(osSemaphoreAcquire(at_resp_sem, 1000) == osOK) {
+                    AT_CopyResponse(snap, sizeof(snap));
+                    if(strstr(snap, "SEND OK")) { ok = 1; break; }
+                    if(strstr(snap, "ERROR")) break;
+                }
+            }
+            if(!ok) return HAL_ERROR;
+        }
+    }
+
+    /* 接收 HTTP 响应 */
+    deadline = osKernelGetTickCount() + 20000;
+    osDelay(100);
+    while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+
+    while((osKernelGetTickCount() < deadline)) {
+        uint32_t primask; uint16_t snap_len;
+        primask = AT_EnterCritical();
+        snap_len = at_response_len;
+        AT_ExitCritical(primask);
+
+        if(snap_len == 0) {
+            if(osSemaphoreAcquire(at_resp_sem, 3000) != osOK) break;
+            primask = AT_EnterCritical();
+            snap_len = at_response_len;
+            AT_ExitCritical(primask);
+            if(snap_len == 0) continue;
+        }
+
+        {
+            static char buf[4096];
+            uint16_t copy = snap_len;
+            if(copy > sizeof(buf)-1) copy = sizeof(buf)-1;
+            primask = AT_EnterCritical();
+            memcpy(buf, at_response, copy);
+            buf[copy] = '\0';
+            at_response_len = 0; at_response[0] = '\0';
+            AT_ExitCritical(primask);
+
+            if(strstr(buf, "CLOSED") || strstr(buf, "ERROR"))
+                break;
+
+            if(!headers_done) {
+                char *hm = strstr(buf, "HTTP/");
+                char *he = hm ? strstr(hm, "\r\n\r\n") : NULL;
+                if(he) {
+                    headers_done = 1;
+                    char *cl = strstr(buf, "Content-Length:");
+                    if(cl) content_length = (uint32_t)atoi(cl + 15);
+                    uint32_t blen = (uint32_t)((uint8_t*)buf + copy - (uint8_t*)he - 4);
+                    uint32_t take = blen;
+                    if(total_received + take > max_chunk) take = max_chunk - total_received;
+                    if(take > 0) {
+                        memcpy(chunk + total_received, he + 4, take);
+                        /* ---- DEBUG: 打印首包 payload 前8/中8/尾8字节 ---- */
+                        {
+                            uint32_t dlen = take;
+                            uint32_t mid = dlen / 2;
+                            if(mid > 4) mid -= 4;
+                            printf("[DBG] HDR-body len=%lu first:%02x%02x%02x%02x%02x%02x%02x%02x",
+                                   dlen,
+                                   he[4],he[5],he[6],he[7],he[8],he[9],he[10],he[11]);
+                            if(dlen >= 16) printf(" mid:%02x%02x%02x%02x%02x%02x%02x%02x",
+                                he[4+mid],he[5+mid],he[6+mid],he[7+mid],
+                                he[8+mid],he[9+mid],he[10+mid],he[11+mid]);
+                            if(dlen >= 8) printf(" tail:%02x%02x%02x%02x%02x%02x%02x%02x",
+                                he[4+dlen-8],he[4+dlen-7],he[4+dlen-6],he[4+dlen-5],
+                                he[4+dlen-4],he[4+dlen-3],he[4+dlen-2],he[4+dlen-1]);
+                            printf("\r\n");
+                        }
+                        total_received += take;
+                    }
+                }
+            } else {
+                /* 后续 +IPD 数据: 必须剥离 "+IPD,<link>,<len>:" 前缀 */
+                uint8_t *data_ptr = (uint8_t*)buf;
+                uint32_t data_avail = copy;
+                char *ipd = strstr(buf, "+IPD,");
+                if(ipd) {
+                    char *comma2 = strchr(ipd + 5, ',');
+                    char *colon  = comma2 ? strchr(comma2 + 1, ':') : NULL;
+                    if(colon) {
+                        data_ptr  = (uint8_t*)(colon + 1);
+                        data_avail = (uint32_t)((uint8_t*)buf + copy - data_ptr);
+                    }
+                }
+                uint32_t take = data_avail;
+                if(total_received + take > max_chunk) take = max_chunk - total_received;
+                if(take > 0) {
+                    memcpy(chunk + total_received, data_ptr, take);
+                    /* ---- DEBUG: 打印后续 payload 前8/中8/尾8字节 ---- */
+                    {
+                        uint32_t dlen = take;
+                        uint32_t mid = dlen / 2;
+                        if(mid > 4) mid -= 4;
+                        printf("[DBG] IPD-body len=%lu first:%02x%02x%02x%02x%02x%02x%02x%02x",
+                               dlen,
+                               data_ptr[0],data_ptr[1],data_ptr[2],data_ptr[3],
+                               data_ptr[4],data_ptr[5],data_ptr[6],data_ptr[7]);
+                        if(dlen >= 16) printf(" mid:%02x%02x%02x%02x%02x%02x%02x%02x",
+                            data_ptr[mid],data_ptr[mid+1],data_ptr[mid+2],data_ptr[mid+3],
+                            data_ptr[mid+4],data_ptr[mid+5],data_ptr[mid+6],data_ptr[mid+7]);
+                        if(dlen >= 8) printf(" tail:%02x%02x%02x%02x%02x%02x%02x%02x",
+                            data_ptr[dlen-8],data_ptr[dlen-7],data_ptr[dlen-6],data_ptr[dlen-5],
+                            data_ptr[dlen-4],data_ptr[dlen-3],data_ptr[dlen-2],data_ptr[dlen-1]);
+                        printf("\r\n");
+                    }
+                    total_received += take;
+                }
+            }
+        }
+
+        if(total_received >= max_chunk) break;
+        if(content_length > 0 && total_received >= content_length) break;
+    }
+
+    *chunk_len = total_received;
+    if(content_length > 0 && total_received < content_length) return HAL_ERROR;
+    return (total_received > 0) ? HAL_OK : HAL_ERROR;
+}
+
+/* 关闭持久连接 */
+void AT_HttpPersistClose(void)
+{
+    if(g_persistent) {
+        AT_SendLocked("AT+CIPCLOSE=1", "OK", 3000);
+        AT_ClearResponse();
+        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
+        g_persistent = 0;
+    }
+    osMutexRelease(at_mutex);
+}
+
+/* ---- 原有分块下载 (每次新建连接) ---- */
 HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
                                    uint8_t *chunk, uint32_t *chunk_len)
 {
     char  host[128], path[512];
-    uint16_t port = 80;
+    uint16_t port = 443;
     uint32_t total_received = 0;
     const uint32_t max_chunk = chunk_len ? *chunk_len : 0;
     HAL_StatusTypeDef ret = HAL_ERROR;
@@ -340,54 +584,43 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
 
     if(!url || !chunk || !chunk_len || max_chunk == 0) return HAL_ERROR;
 
-    /* ---- 1. 解析 URL ---- */
+    /* ---- 解析 URL ---- */
     const char *p = url;
     if(strncmp(p, "https://", 8) == 0)      { p += 8; port = 443; }
-    else if(strncmp(p, "http://", 7) == 0)  { p += 7; }
+    else if(strncmp(p, "http://", 7) == 0)  { p += 7; port = 80; }
 
-    const char *slash  = strchr(p, '/');
-    const char *colon  = strchr(p, ':');
-
-    if(colon && (!slash || colon < slash))
-    {
+    const char *slash = strchr(p, '/');
+    const char *colon = strchr(p, ':');
+    if(colon && (!slash || colon < slash)) {
         size_t hlen = (size_t)(colon - p);
         if(hlen >= sizeof(host)) hlen = sizeof(host) - 1;
         memcpy(host, p, hlen); host[hlen] = '\0';
         port = (uint16_t)atoi(colon + 1);
-    }
-    else if(slash)
-    {
+    } else if(slash) {
         size_t hlen = (size_t)(slash - p);
         if(hlen >= sizeof(host)) hlen = sizeof(host) - 1;
         memcpy(host, p, hlen); host[hlen] = '\0';
-    }
-    else
-    {
+    } else {
         strncpy(host, p, sizeof(host) - 1);
         host[sizeof(host) - 1] = '\0';
     }
-
     if(slash) strncpy(path, slash, sizeof(path) - 1);
     else     { path[0] = '/'; path[1] = '\0'; }
     path[sizeof(path) - 1] = '\0';
 
-    /* ---- 2. 获取互斥锁 ---- */
+    /* ---- 获取互斥锁 ---- */
     if(osMutexAcquire(at_mutex, 30000) != osOK) return HAL_TIMEOUT;
 
-    /* ---- 3. 启用多连接模式 ---- */
+    /* ---- CIPMUX=1 ---- */
     if(AT_SendLocked("AT+CIPMUX=1", "OK", 2000) != HAL_OK) goto exit;
     AT_ClearResponse();
     while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
 
-    /* ---- 4. 建立 TCP 连接 ---- */
+    /* ---- CIPSTART SSL:443 (不需要 CIPSSLSIZE!) ---- */
     {
         char cmd[256];
-        port = 80;  /* 强制 HTTP, ESP8266 不支持 SSL */
-        /* 关闭可能残留的 link=1 连接 */
-        AT_SendLocked("AT+CIPCLOSE=1", "OK", 1000);
-        AT_ClearResponse();
-        while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
-        int n = snprintf(cmd, sizeof(cmd), "AT+CIPSTART=1,\"TCP\",\"%s\",%u", host, port);
+        const char *proto = (port == 443) ? "SSL" : "TCP";
+        int n = snprintf(cmd, sizeof(cmd), "AT+CIPSTART=1,\"%s\",\"%s\",%u", proto, host, port);
         if(n >= (int)sizeof(cmd)) goto exit;
         HAL_StatusTypeDef s = AT_SendLocked(cmd, "OK", 15000);
         if(s != HAL_OK) {
@@ -398,7 +631,7 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
         if(s != HAL_OK) goto exit_clip;
     }
 
-    /* ---- 5. 构造 HTTP GET 请求 ---- */
+    /* ---- CIPSEND + HTTP GET ---- */
     {
         char http_req[1024];
         uint32_t range_end = offset + max_chunk - 1;
@@ -406,13 +639,12 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
             "GET %s HTTP/1.1\r\n"
             "Host: %s\r\n"
             "Range: bytes=%lu-%lu\r\n"
-            "Connection: close\r\n"
+            "Connection: keep-alive\r\n"
             "\r\n",
             path, host, (unsigned long)offset, (unsigned long)range_end);
         if(req_len < 0 || req_len >= (int)sizeof(http_req)) goto exit_clip;
-        printf("[HTTP] Request: Range bytes=%lu-%lu\r\n", (unsigned long)offset, (unsigned long)range_end);
 
-        /* ---- 6. AT+CIPSEND ---- */
+        /* CIPSEND */
         {
             char cipsend[64];
             snprintf(cipsend, sizeof(cipsend), "AT+CIPSEND=1,%d", req_len);
@@ -440,16 +672,16 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
         }
     }
 
-    /* ---- 7. 接收 HTTP 响应 ---- */
+    /* ---- 接收 HTTP 响应: 轮询 at_response, 解析 +IPD 数据 ---- */
     content_length = 0;
     {
         int headers_done = 0;
-        uint32_t recv_deadline = osKernelGetTickCount() + 20000;
+        uint32_t deadline = osKernelGetTickCount() + 20000;
 
         osDelay(100);
         while(osSemaphoreAcquire(at_resp_sem, 0) == osOK);
 
-        while((osKernelGetTickCount() < recv_deadline))
+        while(!headers_done && (osKernelGetTickCount() < deadline))
         {
             uint32_t primask;
             uint16_t snap_len;
@@ -460,14 +692,13 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
 
             if(snap_len == 0) {
                 if(osSemaphoreAcquire(at_resp_sem, 3000) != osOK) break;
-                osDelay(50);
                 primask = AT_EnterCritical();
                 snap_len = at_response_len;
                 AT_ExitCritical(primask);
                 if(snap_len == 0) continue;
             }
 
-            /* 拷贝到静态 buffer 并清空 at_response */
+            /* 拷贝到静态 buf 并清空 at_response */
             {
                 static char buf[4096];
                 uint16_t copy = snap_len;
@@ -483,24 +714,13 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
                     break;
 
                 if(!headers_done) {
-                    /* 从 HTTP/ 位置搜 \r\n\r\n, 避免匹配 Recv/SEND OK 后的 */
+                    /* 从 HTTP/ 位置搜 \r\n\r\n */
                     char *hm = strstr(buf, "HTTP/");
                     char *he = hm ? strstr(hm, "\r\n\r\n") : NULL;
                     if(he) {
                         headers_done = 1;
                         char *cl = strstr(buf, "Content-Length:");
                         if(cl) content_length = (uint32_t)atoi(cl + 15);
-                        {
-                            char *cr = strstr(buf, "Content-Range:");
-                            if(cr) {
-                                char *eol = strstr(cr, "\r\n");
-                                printf("[HTTP] Response: %.*s\r\n", eol ? (int)(eol-cr) : 30, cr);
-                            }
-                        }
-                        printf("[HTTP] hdr_end@%d body0: %02X%02X%02X%02X%02X%02X%02X%02X\r\n",
-                               (int)(he-buf),
-                               (uint8_t)he[4],(uint8_t)he[5],(uint8_t)he[6],(uint8_t)he[7],
-                               (uint8_t)he[8],(uint8_t)he[9],(uint8_t)he[10],(uint8_t)he[11]);
                         /* 提取 body */
                         uint32_t blen = (uint32_t)((uint8_t*)buf + copy - (uint8_t*)he - 4);
                         uint32_t take = blen;
@@ -511,7 +731,7 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
                         }
                     }
                 } else {
-                    /* 头部已解析, body 续传 */
+                    /* 续传 body */
                     uint32_t take = copy;
                     if(total_received + take > max_chunk) take = max_chunk - total_received;
                     if(take > 0) {
@@ -521,12 +741,13 @@ HAL_StatusTypeDef AT_HttpGetChunk(const char *url, uint32_t offset,
                 }
             }
 
-            if(total_received >= max_chunk) break;
-            if(content_length > 0 && total_received >= content_length) break;
+            if(headers_done) {
+                if(total_received >= max_chunk) break;
+                if(content_length > 0 && total_received >= content_length) break;
+            }
         }
     }
 
-    /* 完整性检查 */
     if(content_length > 0 && total_received < content_length)
         ret = HAL_ERROR;
     else

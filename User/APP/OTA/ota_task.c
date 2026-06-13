@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "cJSON.h"
 #include "ota_flag.h"
 #include "at_driver.h"
@@ -34,12 +35,15 @@ void OTA_ReportProgress(int step)
 void OTA_Task(void *arg)
 {
     char json_buf[512];
+    static uint32_t s_offset = 0;     /* 断点续传: 上次下载到的位置 */
+    static uint8_t  s_first  = 1;    /* 首次下载标志, 用于 Flash 擦除 */
+
     for(;;)
     {
         if(osMessageQueueGet(ota_notify_queue, json_buf, 0, portMAX_DELAY) != osOK)
         {
             continue;
-        } 
+        }
 
         cJSON *root = cJSON_Parse(json_buf);
         if(!root) continue;
@@ -71,40 +75,55 @@ void OTA_Task(void *arg)
         cJSON_Delete(root);  /* 安全释放, url/md5_exp 已是独立副本 */
 
         printf("[OTA] New firmware: %s size=%lu\r\n", version, size);
-        OTA_ReportProgress(0);   
 
-        FLASH_EraseInitTypeDef erase = {
-            .TypeErase  = FLASH_TYPEERASE_MASSERASE,
-            .Banks      = FLASH_BANK_2
-        };
-        uint32_t err;
-        HAL_FLASH_Unlock();
-        HAL_FLASHEx_Erase(&erase, &err);
-        HAL_FLASH_Lock();
+        /* 仅首次下载 (s_first==1) 时擦除 Flash */
+        if(s_first) {
+            s_offset = 0;
+            FLASH_EraseInitTypeDef erase = {
+                .TypeErase  = FLASH_TYPEERASE_MASSERASE,
+                .Banks      = FLASH_BANK_2
+            };
+            uint32_t err;
+            HAL_FLASH_Unlock();
+            HAL_FLASHEx_Erase(&erase, &err);
+            HAL_FLASH_Lock();
+        } else {
+            printf("[OTA] Resuming from offset %lu\r\n", s_offset);
+        }
+        OTA_ReportProgress(0);
 
-        /* Range 分块: 1024 字节每块, 跟最后一包(正确)的尺寸相近 */
+        /* 持久化 SSL 连接: 单连接 + keep-alive, 所有 chunk 走同一连接 */
         osDelay(2000);
 
         mbedtls_md5_context md5_ctx;
         mbedtls_md5_init(&md5_ctx);
         mbedtls_md5_starts(&md5_ctx);
 
-        #define CHUNK_SZ 1024
+        #define CHUNK_SZ 2048
         uint8_t  chunk[CHUNK_SZ];
-        uint32_t offset = 0, recv_len, md5_bytes = 0;
+        uint32_t offset = s_offset, recv_len, md5_bytes = 0;
         int      ok_flag = 1, retry = 0;
+
+        /* 打开持久连接 */
+        uint32_t total_size = 0;
+        if(AT_HttpPersistOpen(url, &total_size) != HAL_OK) {
+            printf("[OTA] Failed to open SSL connection\r\n");
+            OTA_ReportProgress(-2); continue;
+        }
+        printf("[OTA] Persist OK, total=%lu, resume@%lu\r\n", total_size, offset);
 
         while (offset < size)
         {
             uint32_t remaining = size - offset;
             recv_len = (CHUNK_SZ < remaining) ? CHUNK_SZ : remaining;
-            HAL_StatusTypeDef r = AT_HttpGetChunk(url, offset, chunk, &recv_len);
+            s_offset = offset;
+            HAL_StatusTypeDef r = AT_HttpPersistGetChunk(offset, chunk, &recv_len);
             if (r != HAL_OK || recv_len == 0) {
-                if(retry < 5) { retry++; osDelay(2000); continue; }
-                printf("[OTA] Err at %lu\r\n", offset); ok_flag = 0; break;
+                if(retry < 3) { retry++; osDelay(1000); continue; }
+                printf("[OTA] Err at %lu, will resume\r\n", offset);
+                s_first = 0; ok_flag = 0; break;
             }
             retry = 0;
-            osDelay(3000); /* OSS auth_key 限速: 70+ 请求后会拒绝, 3s 间隔避免 */
 
             uint32_t ws = (recv_len + 31) & ~31U;
             HAL_FLASH_Unlock();
@@ -120,6 +139,8 @@ void OTA_Task(void *arg)
             offset += recv_len;
             printf("[OTA] %u%% (%lu b)\r\n", (uint8_t)(offset*100/size), recv_len);
         }
+
+        AT_HttpPersistClose();
 
         if (!ok_flag)
         {
